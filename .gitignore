@@ -1,0 +1,17 @@
+@"
+# Compiled output
+*.exe
+*.dll
+*.pdb
+
+# OS / editor cruft
+Thumbs.db
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# Logs and temp files
+*.log
+*.tmp
+"@ | Out-File -Encoding UTF8 .gitignore
