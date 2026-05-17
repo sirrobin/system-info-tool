@@ -6,22 +6,18 @@
     Starts elevated automatically (UAC prompt on launch). Admin rights are
     needed to read SMART/wear data for SSD health.
 
+    Label printing uses QZ Tray (https://qz.io) running on a shared host.
+    Run Generate-QzCert.ps1 once to create the signing credentials, then
+    paste the values into the two constants near the top of this file and
+    recompile.
+
 .NOTES
     To convert this to a standalone .exe (no PowerShell window):
         Install-Module ps2exe -Scope CurrentUser
-        Invoke-ps2exe .\SystemInfo-GUI.ps1 .\SystemInfo.exe -noConsole
-
-    For ps2exe builds, also pass -requireAdmin to embed an admin manifest:
         Invoke-ps2exe .\SystemInfo-GUI.ps1 .\SystemInfo.exe -noConsole -requireAdmin
-    That makes Windows show the UAC prompt before the .exe even starts,
-    which is cleaner than the in-script relaunch this script falls back to.
 #>
 
-# ----------------------------------------------------------------------
-# Auto-elevate: if we're not running as Administrator, relaunch via UAC
-# and exit. The relaunched copy starts elevated and runs the rest of
-# the script normally.
-# ----------------------------------------------------------------------
+# ── Auto-elevate ──────────────────────────────────────────────────────────────
 $_isAdminCheck = $false
 try {
     $_id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
@@ -40,30 +36,22 @@ if (-not $_isAdminCheck) {
         $_isPwshHost = ($_exePath -match '\\powershell(_ise)?\.exe$' -or $_exePath -match '\\pwsh\.exe$')
 
         if ($_exePath -and ($_exePath -like '*.exe') -and -not $_isPwshHost) {
-            # ps2exe-built .exe — relaunch ourselves elevated
             Start-Process -FilePath $_exePath -Verb RunAs | Out-Null
             exit
         } else {
-            # Running as a .ps1 — relaunch via PowerShell elevated.
-            # -WindowStyle Hidden suppresses the empty console window that
-            # would otherwise flash up behind the UAC prompt.
             $_scriptPath = $null
-            if ($PSCommandPath)                  { $_scriptPath = $PSCommandPath }
-            elseif ($MyInvocation.MyCommand.Path){ $_scriptPath = $MyInvocation.MyCommand.Path }
+            if ($PSCommandPath)                   { $_scriptPath = $PSCommandPath }
+            elseif ($MyInvocation.MyCommand.Path) { $_scriptPath = $MyInvocation.MyCommand.Path }
 
             if ($_scriptPath) {
                 Start-Process -FilePath 'powershell.exe' `
-                    -ArgumentList @('-NoProfile','-NonInteractive','-WindowStyle','Hidden','-ExecutionPolicy','Bypass','-File',"`"$_scriptPath`"") `
-                    -Verb RunAs `
-                    -WindowStyle Hidden | Out-Null
+                    -ArgumentList @('-NoProfile','-NonInteractive','-WindowStyle','Hidden',
+                                    '-ExecutionPolicy','Bypass','-File',"`"$_scriptPath`"") `
+                    -Verb RunAs -WindowStyle Hidden | Out-Null
                 exit
             }
         }
     } catch {
-        # User clicked "No" on UAC, or relaunch failed for some reason.
-        # Show a brief notice and continue running unelevated — the user
-        # can use the in-app Restart as Admin button later if they change
-        # their mind.
         Add-Type -AssemblyName System.Windows.Forms
         [System.Windows.Forms.MessageBox]::Show(
             "Continuing without administrator rights. SSD health values will not be available.",
@@ -77,9 +65,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-# ----------------------------------------------------------------------
-# Locate the directory the script/exe lives in (works for .ps1 and ps2exe)
-# ----------------------------------------------------------------------
+# ── AppDir detection (works for .ps1 and ps2exe .exe) ─────────────────────────
 $script:AppDir = $null
 if ($PSScriptRoot)                                  { $script:AppDir = $PSScriptRoot }
 elseif ($MyInvocation.MyCommand.Path)               { $script:AppDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
@@ -91,9 +77,107 @@ else {
 }
 if (-not $script:AppDir) { $script:AppDir = (Get-Location).Path }
 
-# ======================================================================
+# ══════════════════════════════════════════════════════════════════════════════
+#  QZ TRAY CERTIFICATE  (QZ Tray Demo Cert — generated on the QZ Tray host via
+#  Site Manager > + > Create New, which installs override.crt AND registers the
+#  cert in QZ Tray's runtime trust store. Fingerprint: f2b7583d...420eccf8.
+#  Subject: 'QZ Tray Demo Cert' / O='QZ Industries, LLC'. 2048-bit RSA, PKCS#8.)
+# ══════════════════════════════════════════════════════════════════════════════
+$script:EmbeddedCertPem = @'
+-----BEGIN CERTIFICATE-----
+MIIECzCCAvOgAwIBAgIGAZ40pFf6MA0GCSqGSIb3DQEBCwUAMIGiMQswCQYDVQQG
+EwJVUzELMAkGA1UECAwCTlkxEjAQBgNVBAcMCUNhbmFzdG90YTEbMBkGA1UECgwS
+UVogSW5kdXN0cmllcywgTExDMRswGQYDVQQLDBJRWiBJbmR1c3RyaWVzLCBMTEMx
+HDAaBgkqhkiG9w0BCQEWDXN1cHBvcnRAcXouaW8xGjAYBgNVBAMMEVFaIFRyYXkg
+RGVtbyBDZXJ0MB4XDTI2MDUxNjA2MzQwNloXDTQ2MDUxNjA2MzQwNlowgaIxCzAJ
+BgNVBAYTAlVTMQswCQYDVQQIDAJOWTESMBAGA1UEBwwJQ2FuYXN0b3RhMRswGQYD
+VQQKDBJRWiBJbmR1c3RyaWVzLCBMTEMxGzAZBgNVBAsMElFaIEluZHVzdHJpZXMs
+IExMQzEcMBoGCSqGSIb3DQEJARYNc3VwcG9ydEBxei5pbzEaMBgGA1UEAwwRUVog
+VHJheSBEZW1vIENlcnQwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDH
+x51c97jJdpAcODfK8i1a+U1rLM06U/rH1TTjZSFafAO65/9FDJph+/lTeUy7327S
+Jae2WngFbdFeyjBz1B8h/Gow0VLJ59n6hliAhHGssSu1Bd8iQW/1+HsHwi8yWkHq
+dvtOZmQEaFcmr8ZfS3JSmW8oeLaJzlDMsiH9NBLjhAPy50NWiq0QsYHaWniPmaEh
+DRAk2t696oTbUcosZ6sBKfn7bkVRAvBZlwJ9IoUeOIwrEypIjJoihoInBjtVkSjR
+Q5XP4VbU2KSFYITotaNaJbWMcr9Ct6brPAPc+KSLtFLOdyJGyuslHrj+jJ3/ppGP
+VnltZ1/tC3jThH0VDe/JAgMBAAGjRTBDMBIGA1UdEwEB/wQIMAYBAf8CAQEwDgYD
+VR0PAQH/BAQDAgEGMB0GA1UdDgQWBBQUVbyfPij7g/7ZwODM7XOzNFVqqTANBgkq
+hkiG9w0BAQsFAAOCAQEAxB7XKkEsFWCUashZQMA+zfwfL2DuAdvvzQHHP3vQYK1p
+t4fU68hRZ3iL75kaVGHkYxnsxpMByaAAQ7FkLs1rhSR4e5QPPFV1y2quS2KlHT/y
+Lg3KzgUDtXuDCAXpKJh5nCfLWnPmxynhXT9FdprqKwGq0S5EKl2wVVi78JzxI+Di
+0Iv6yZPV9ESZoHP5mlhnk1uC8+xBbO24nfqUldoHMn5Q/hMhObGJ5OPVicAkeWw2
+PCVUG3iX52js//p3cJYncV3mBYuERsIks7StQ3R0pk0ILQpiQ/he+Wu1gCPkza0w
+DhSlpMnguYLchrLNquF3KajOuaGSz/Z11fHbrDHfwQ==
+-----END CERTIFICATE-----
+'@
+
+$script:EmbeddedKeyPem = @'
+-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDHx51c97jJdpAc
+ODfK8i1a+U1rLM06U/rH1TTjZSFafAO65/9FDJph+/lTeUy7327SJae2WngFbdFe
+yjBz1B8h/Gow0VLJ59n6hliAhHGssSu1Bd8iQW/1+HsHwi8yWkHqdvtOZmQEaFcm
+r8ZfS3JSmW8oeLaJzlDMsiH9NBLjhAPy50NWiq0QsYHaWniPmaEhDRAk2t696oTb
+UcosZ6sBKfn7bkVRAvBZlwJ9IoUeOIwrEypIjJoihoInBjtVkSjRQ5XP4VbU2KSF
+YITotaNaJbWMcr9Ct6brPAPc+KSLtFLOdyJGyuslHrj+jJ3/ppGPVnltZ1/tC3jT
+hH0VDe/JAgMBAAECggEAEwl1eFdut1vh7Z55yo/7PHEHLJBPWiCIhCRP7t9DJ2Er
+5dKXo5fI2k9tecPUSQ7Ie6P08E58o1/MlLDFnzP2Z4GrCM3Zir3aKqJEqrJ0NpWH
+aa+OjLAZoCG2b43Ue4LYRyRhXB4rp7PdoiUbzRbeZPqT+hJOqqELWAYdcQhWSHGv
+5P7QF8vp9cKlieYzYbbEiSaqMwkDsAh8/MTDMGAn6vB4nfFg9z6jnSYNhlA1Fqmb
+z4fFZnSHfucxbe4DF6HZaEdd+s+YC3+dDHHGA26d/8t9iGgJ0EZFcG7WJlZ4zXT0
+jbeU/I8Q/odqyD9hIKZHJ5eMSIhNqvFjeLu3deyuVQKBgQDoVwsiVdeadC+CKLk/
+/715UwkC+c4OYiXWEneeAB7SiZEOMoEGZvr/yMNt3ht+VgOYGCFqfSV+7cBaphMF
+u1KByWwKpWrXfDrfVEvvpJQdsY3z+MzqkPCCXCbNRCU0pqn4bp+5A9Po5KqEPeOt
+OQL9lvyQawbW7PwBcv5HnoNWKwKBgQDcH77lvj/5k/9Xrtpad2wSKfRWOshTiJDy
+8e/xA8UAL28gZxO94mGtwZShBuoHMoN56OciiXLAD7q0JRurGjoExqG1oIojjzuR
+8sdVeRFab23EH15pkURjNUGgJXJcQxZ8iOkh2KsbxBCfLwGCtYdCkFLdUrLsJtZY
+qx+Yjq4r2wKBgBLYnKqYU/jPW9su+nfagsAIoD6BjNlV1MPck59ZWyawyfdg2V5v
+lASTgGa1EX3Z9EiuDGfa5uO43VV9CyX33+VvNThX2qbICO58o/w4WVtfP6h+kgCk
+6R1p5CvaTzpKGpdwQbx8NwA5LCu16XXvnfJ8ANimFdPxPS/Q6BdfIEApAoGAWvgT
+oEZ7kd0DzWzJeFGaK/eCrpAkccEihgROMMBqDaWMu0td8T85NuGlVtbQqKDLjPof
+azp6Xb0iX4hmYtO33nloIvNxozhyWeKHVl9uOH2MU1zTW7VZGdbMhC51kIN5K4Y5
+Mm+kZxkj9WUrrqTufSe/1w9yOf3i30n5CMcOW7kCgYEAjXyMP+eg52pqBGYMAK+H
+mCxrUy0zOdZaHkwb5f2NgprVUdIMbR2XlF+uRVrObMQlN5/uSfmInDKPsAr7/zgZ
+oKDeV+hji0Yeq1f2OTcX8TRpX39xbV681tl+NDpQbxb2kXQomsWLovh+XMsU43rK
+oQEn69TPWh4VXelEWByghPQ=
+-----END PRIVATE KEY-----
+'@
+
+$script:SettingsPath = Join-Path $script:AppDir 'settings.json'
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SETTINGS  (persisted to settings.json alongside the exe/script)
+# ══════════════════════════════════════════════════════════════════════════════
+function Get-AppSettings {
+    $defaults = [PSCustomObject]@{
+        QzHost        = 'localhost'
+        QzPort        = 8181
+        UseSecureWs   = $true
+        PrinterName   = 'DYMO LabelWriter 450 Turbo'
+        LabelWidthMm  = 89
+        LabelHeightMm = 36
+        RotateLabel90 = $true
+    }
+    if (-not (Test-Path $script:SettingsPath)) { return $defaults }
+    try {
+        $s = Get-Content $script:SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        # Fill in any keys missing from an older settings file
+        foreach ($p in $defaults.PSObject.Properties) {
+            if ($null -eq $s.($p.Name)) {
+                Add-Member -InputObject $s -NotePropertyName $p.Name -NotePropertyValue $p.Value -Force
+            }
+        }
+        return $s
+    } catch { return $defaults }
+}
+
+function Save-AppSettings {
+    param($Settings)
+    $Settings | ConvertTo-Json -Depth 3 |
+        Set-Content -LiteralPath $script:SettingsPath -Encoding UTF8 -Force
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  DATA GATHERING
-# ======================================================================
+# ══════════════════════════════════════════════════════════════════════════════
 function Get-Safe {
     param([scriptblock]$Script, [string]$Default = 'Unknown')
     try {
@@ -104,8 +188,6 @@ function Get-Safe {
 }
 
 # DEVPKEY property IDs from pciprop.h
-#    9 = CurrentLinkSpeed   10 = CurrentLinkWidth
-#   11 = MaxLinkSpeed       12 = MaxLinkWidth
 $script:PKEY_Parent      = '{4340A6C5-93FA-4706-972C-7B648008A5A7} 8'
 $script:PKEY_PciCurSpeed = '{3AB22E31-8264-4B4E-9AF5-A8D2D8E33E62} 9'
 $script:PKEY_PciCurWidth = '{3AB22E31-8264-4B4E-9AF5-A8D2D8E33E62} 10'
@@ -130,7 +212,7 @@ function Get-PcieLinkForNvme {
         $widthOk = ($maxWidth -and $script:ValidPcieWidths -contains [int]$maxWidth)
 
         if ($speedOk -and $widthOk) {
-            $desc = "PCIe $($script:PcieGenMap[[int]$maxSpeed]) x$maxWidth"
+            $desc  = "PCIe $($script:PcieGenMap[[int]$maxSpeed]) x$maxWidth"
             $curOk = ($curSpeed -and [int]$curSpeed -ge 1 -and [int]$curSpeed -le 6)
             if ($curOk -and [int]$curSpeed -lt [int]$maxSpeed) {
                 $desc += " (currently $($script:PcieGenMap[[int]$curSpeed]))"
@@ -143,35 +225,21 @@ function Get-PcieLinkForNvme {
 }
 
 function Get-DiskHealthPercent {
-    <#
-      Returns an int 0-100 or $null. Tries multiple sources because no
-      single API works for every drive:
-        1. Get-StorageReliabilityCounter Wear (NVMe + SATA SSD, needs admin)
-        2. MSFT_PhysicalDisk Reliability Wear via the Storage namespace
-        3. Get-PhysicalDisk -IncludeDiagnosticInfo (newer Windows)
-    #>
     param($PhysicalDisk)
-
-    # Source 1: Get-StorageReliabilityCounter (the cleanest path)
     try {
         $rel = $PhysicalDisk | Get-StorageReliabilityCounter -ErrorAction Stop
         if ($rel -and $null -ne $rel.Wear) {
             return [Math]::Max(0, [Math]::Min(100, 100 - [int]$rel.Wear))
         }
     } catch { }
-
-    # Source 2: query the Storage namespace directly. Sometimes this works
-    # when Get-StorageReliabilityCounter doesn't.
     try {
         $rel2 = Get-CimInstance -Namespace root\Microsoft\Windows\Storage `
             -ClassName MSFT_StorageReliabilityCounter -ErrorAction Stop |
-            Where-Object { $_.DeviceId -eq $PhysicalDisk.DeviceId } |
-            Select-Object -First 1
+            Where-Object { $_.DeviceId -eq $PhysicalDisk.DeviceId } | Select-Object -First 1
         if ($rel2 -and $null -ne $rel2.Wear) {
             return [Math]::Max(0, [Math]::Min(100, 100 - [int]$rel2.Wear))
         }
     } catch { }
-
     return $null
 }
 
@@ -184,14 +252,6 @@ function Test-IsAdmin {
 }
 
 function Test-IsLaptop {
-    <#
-      Returns $true if this looks like a portable/laptop machine, $false
-      for desktops/towers/servers. Uses Win32_SystemEnclosure ChassisTypes
-      (SMBIOS spec): 8=Portable, 9=Laptop, 10=Notebook, 11=HandHeld,
-      12=DockingStation, 14=SubNotebook, 18=ExpansionChassis (rare),
-      21=PeripheralChassis (rare), 30=Tablet, 31=Convertible, 32=Detachable.
-      Falls back to "is there a battery?" if chassis is missing/unknown.
-    #>
     $portable = @(8, 9, 10, 11, 12, 14, 30, 31, 32)
     try {
         $enc = Get-CimInstance -ClassName Win32_SystemEnclosure -ErrorAction Stop
@@ -201,7 +261,6 @@ function Test-IsLaptop {
             }
         }
     } catch { }
-    # Fallback: if there's a battery on the system, treat it as a laptop
     try {
         $bat = Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue
         if ($bat) { return $true }
@@ -210,22 +269,16 @@ function Test-IsLaptop {
 }
 
 function Get-WindowsActivationStatus {
-    <# Returns "Activated", "Not activated", "Grace period", or "Unknown". #>
     try {
-        # ApplicationID 55c92734-... is the well-known Windows OS license app ID,
-        # which filters out Office and other products.
-        $q = "SELECT LicenseStatus, Description FROM SoftwareLicensingProduct " +
-             "WHERE ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f' " +
-             "AND PartialProductKey IS NOT NULL"
+        $q   = "SELECT LicenseStatus FROM SoftwareLicensingProduct " +
+               "WHERE ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f' " +
+               "AND PartialProductKey IS NOT NULL"
         $lic = Get-CimInstance -Query $q -ErrorAction Stop | Select-Object -First 1
         if (-not $lic) { return 'Not activated' }
         switch ([int]$lic.LicenseStatus) {
-            1 { 'Activated' }
-            0 { 'Unlicensed' }
-            2 { 'Initial grace' }
-            3 { 'Additional grace' }
-            4 { 'Non-genuine grace' }
-            5 { 'Notification (not activated)' }
+            1 { 'Activated' }          0 { 'Unlicensed' }
+            2 { 'Initial grace' }      3 { 'Additional grace' }
+            4 { 'Non-genuine grace' }  5 { 'Notification (not activated)' }
             6 { 'Extended grace' }
             default { "Status $($lic.LicenseStatus)" }
         }
@@ -252,10 +305,8 @@ function Get-SystemReport {
     _Add 'Manufacturer'  (Get-Safe { $cs.Manufacturer })
     _Add 'Model'         (Get-Safe { $cs.Model })
     _Add 'Serial Number' (Get-Safe { $bios.SerialNumber })
-
     _Add 'CPU' (Get-Safe { (Get-CimInstance Win32_Processor | Select-Object -First 1).Name.Trim() })
 
-    # GPUs
     $vcs = @()
     try {
         $vcs = Get-CimInstance Win32_VideoController |
@@ -290,7 +341,8 @@ function Get-SystemReport {
         })
 
         _Add 'Screen size' (Get-Safe {
-            $m = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction Stop | Select-Object -First 1
+            $m = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction Stop |
+                Select-Object -First 1
             if ($m.MaxHorizontalImageSize -and $m.MaxVerticalImageSize) {
                 $wCm = [double]$m.MaxHorizontalImageSize
                 $hCm = [double]$m.MaxVerticalImageSize
@@ -303,10 +355,12 @@ function Get-SystemReport {
             $res = $null
             try {
                 $modes = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorListedSupportedSourceModes -ErrorAction Stop
-                $best = $modes | ForEach-Object {
-                    $_.MonitorSourceModes | Sort-Object { $_.HorizontalActivePixels * $_.VerticalActivePixels } -Descending |
+                $best  = $modes | ForEach-Object {
+                    $_.MonitorSourceModes |
+                        Sort-Object { $_.HorizontalActivePixels * $_.VerticalActivePixels } -Descending |
                         Select-Object -First 1
-                } | Sort-Object { $_.HorizontalActivePixels * $_.VerticalActivePixels } -Descending | Select-Object -First 1
+                } | Sort-Object { $_.HorizontalActivePixels * $_.VerticalActivePixels } -Descending |
+                    Select-Object -First 1
                 if ($best) { $res = "{0} x {1}" -f $best.HorizontalActivePixels, $best.VerticalActivePixels }
             } catch { }
             if (-not $res) {
@@ -318,20 +372,18 @@ function Get-SystemReport {
         })
     }
 
-    # ---- Storage: one row per physical disk ----------------------------
+    # Storage: one row per physical disk
     try {
         $physDisks = Get-PhysicalDisk -ErrorAction SilentlyContinue | Sort-Object DeviceId
         if (-not $physDisks) { _Add 'Storage' 'Unknown' }
         else {
             $w32Map = @{}
-            Get-CimInstance Win32_DiskDrive -ErrorAction SilentlyContinue | ForEach-Object {
-                $w32Map[[int]$_.Index] = $_
-            }
+            Get-CimInstance Win32_DiskDrive -ErrorAction SilentlyContinue |
+                ForEach-Object { $w32Map[[int]$_.Index] = $_ }
 
             foreach ($d in $physDisks) {
-                $sizeGB = [Math]::Round($d.Size / 1GB, 0)
-                $model  = if ($d.FriendlyName) { $d.FriendlyName.Trim() } else { 'Unknown disk' }
-
+                $sizeGB   = [Math]::Round($d.Size / 1GB, 0)
+                $model    = if ($d.FriendlyName) { $d.FriendlyName.Trim() } else { 'Unknown disk' }
                 $typeDesc = ''
                 switch ($d.MediaType) {
                     'SSD' {
@@ -341,27 +393,23 @@ function Get-SystemReport {
                                 $pcie = if ($w32) { Get-PcieLinkForNvme -DiskPnpId $w32.PNPDeviceID } else { $null }
                                 $typeDesc = if ($pcie) { "NVMe SSD ($pcie)" } else { 'NVMe SSD' }
                             }
-                            'SATA' { $typeDesc = 'SATA SSD' }
-                            'USB'  { $typeDesc = 'USB SSD' }
-                            'SCSI' { $typeDesc = 'SCSI SSD' }
-                            'RAID' { $typeDesc = 'RAID SSD' }
+                            'SATA'  { $typeDesc = 'SATA SSD' }
+                            'USB'   { $typeDesc = 'USB SSD'  }
+                            'SCSI'  { $typeDesc = 'SCSI SSD' }
+                            'RAID'  { $typeDesc = 'RAID SSD' }
                             default { $typeDesc = "$($d.BusType) SSD" }
                         }
                     }
                     'HDD' {
                         switch ($d.BusType) {
-                            'SATA' { $typeDesc = 'SATA HDD' }
-                            'USB'  { $typeDesc = 'USB HDD' }
+                            'SATA'  { $typeDesc = 'SATA HDD' }
+                            'USB'   { $typeDesc = 'USB HDD'  }
                             default { $typeDesc = "$($d.BusType) HDD" }
                         }
                     }
                     default { $typeDesc = "$($d.BusType) $($d.MediaType)" }
                 }
-
-                # Health: try to show as %; if unavailable, the drive
-                # doesn't expose Wear via SMART (rare on modern SSDs but
-                # common on cheap/old drives and USB-attached storage).
-                $health = Get-DiskHealthPercent $d
+                $health    = Get-DiskHealthPercent $d
                 $highlight = $false
                 if ($null -ne $health) {
                     $healthStr = "Health: $health%"
@@ -369,9 +417,7 @@ function Get-SystemReport {
                 } else {
                     $healthStr = "Health: N/A"
                 }
-
-                $value = "$model -- $sizeGB GB -- $typeDesc -- $healthStr"
-                _Add "Storage (Disk $($d.DeviceId))" $value -Highlight:$highlight
+                _Add "Storage (Disk $($d.DeviceId))" "$model -- $sizeGB GB -- $typeDesc -- $healthStr" -Highlight:$highlight
             }
         }
     } catch { _Add 'Storage' "Error: $($_.Exception.Message)" }
@@ -379,24 +425,25 @@ function Get-SystemReport {
     _Add 'RAM' (Get-Safe { "{0:N0} GB" -f [Math]::Round($cs.TotalPhysicalMemory / 1GB, 0) })
 
     _Add 'RAM Slots' (Get-Safe {
-        $array = Get-CimInstance Win32_PhysicalMemoryArray | Select-Object -First 1
+        $array      = Get-CimInstance Win32_PhysicalMemoryArray | Select-Object -First 1
         $totalSlots = if ($array) { [int]$array.MemoryDevices } else { 0 }
-        $modules = Get-CimInstance Win32_PhysicalMemory | Sort-Object DeviceLocator
-        $populated = @($modules).Count
-
+        $modules    = Get-CimInstance Win32_PhysicalMemory | Sort-Object DeviceLocator
+        $populated  = @($modules).Count
         $looksSoldered = $false
         foreach ($m in $modules) {
-            if ($m.FormFactor -eq 11 -or $m.DeviceLocator -match 'onboard|soldered|system\s*board') { $looksSoldered = $true; break }
+            if ($m.FormFactor -eq 11 -or $m.DeviceLocator -match 'onboard|soldered|system\s*board') {
+                $looksSoldered = $true; break
+            }
         }
-        $typeMap = @{20='DDR';21='DDR2';24='DDR3';26='DDR4';34='DDR5';27='FBD2';30='LPDDR';31='LPDDR2';32='LPDDR3';33='LPDDR4';35='LPDDR5'}
+        $typeMap = @{20='DDR';21='DDR2';24='DDR3';26='DDR4';34='DDR5';27='FBD2';
+                     30='LPDDR';31='LPDDR2';32='LPDDR3';33='LPDDR4';35='LPDDR5'}
         $formMap = @{8='DIMM';11='Row-of-chips (soldered)';12='SODIMM';13='SRIMM';15='FB-DIMM'}
-
         $slotLines = foreach ($m in $modules) {
             $sizeGB = [Math]::Round($m.Capacity / 1GB, 0)
-            $type = if ($typeMap.ContainsKey([int]$m.SMBIOSMemoryType)) { $typeMap[[int]$m.SMBIOSMemoryType] } else { "Type$($m.SMBIOSMemoryType)" }
-            $form = if ($formMap.ContainsKey([int]$m.FormFactor)) { $formMap[[int]$m.FormFactor] } else { "Form$($m.FormFactor)" }
-            $speed = if ($m.ConfiguredClockSpeed) { "$($m.ConfiguredClockSpeed) MT/s" } elseif ($m.Speed) { "$($m.Speed) MT/s" } else { '' }
-            $loc = if ($m.DeviceLocator) { $m.DeviceLocator.Trim() } else { 'Slot?' }
+            $type   = if ($typeMap.ContainsKey([int]$m.SMBIOSMemoryType)) { $typeMap[[int]$m.SMBIOSMemoryType] } else { "Type$($m.SMBIOSMemoryType)" }
+            $form   = if ($formMap.ContainsKey([int]$m.FormFactor))       { $formMap[[int]$m.FormFactor] }       else { "Form$($m.FormFactor)" }
+            $speed  = if ($m.ConfiguredClockSpeed) { "$($m.ConfiguredClockSpeed) MT/s" } elseif ($m.Speed) { "$($m.Speed) MT/s" } else { '' }
+            $loc    = if ($m.DeviceLocator) { $m.DeviceLocator.Trim() } else { 'Slot?' }
             "[$loc] ${sizeGB} GB $type $form $speed".TrimEnd()
         }
         $header = "$totalSlots slot(s), $populated populated"
@@ -408,7 +455,8 @@ function Get-SystemReport {
     _Add 'Wi-Fi' (Get-Safe {
         $adapter = Get-NetAdapter -ErrorAction SilentlyContinue |
             Where-Object {
-                ($_.PhysicalMediaType -eq 'Native 802.11' -or $_.InterfaceDescription -match 'Wi-?Fi|Wireless|WLAN|802\.11') -and
+                ($_.PhysicalMediaType -eq 'Native 802.11' -or
+                 $_.InterfaceDescription -match 'Wi-?Fi|Wireless|WLAN|802\.11') -and
                 $_.InterfaceDescription -notmatch 'Virtual|Bluetooth|WWAN'
             } | Select-Object -First 1
         if (-not $adapter) { return 'No Wi-Fi adapter found' }
@@ -419,16 +467,17 @@ function Get-SystemReport {
             if ($line) { $radioTypes = ($line -split ':', 2)[1].Trim() }
         } catch {}
         $gen = 'Wi-Fi version unknown'
-        if     ($radioTypes -match '802\.11be') { $gen = 'Wi-Fi 7 (802.11be)' }
+        if     ($radioTypes -match '802\.11be') { $gen = 'Wi-Fi 7 (802.11be)'   }
         elseif ($radioTypes -match '802\.11ax') { $gen = 'Wi-Fi 6/6E (802.11ax)' }
-        elseif ($radioTypes -match '802\.11ac') { $gen = 'Wi-Fi 5 (802.11ac)' }
-        elseif ($radioTypes -match '802\.11n')  { $gen = 'Wi-Fi 4 (802.11n)' }
+        elseif ($radioTypes -match '802\.11ac') { $gen = 'Wi-Fi 5 (802.11ac)'   }
+        elseif ($radioTypes -match '802\.11n')  { $gen = 'Wi-Fi 4 (802.11n)'    }
         "$gen -- $($adapter.InterfaceDescription)"
     })
 
     _Add 'Bluetooth' (Get-Safe {
         $bt = Get-PnpDevice -Class Bluetooth -PresentOnly -ErrorAction SilentlyContinue |
-            Where-Object { $_.Status -eq 'OK' -and $_.FriendlyName -match 'Bluetooth' -and $_.FriendlyName -notmatch 'Enumerator' } |
+            Where-Object { $_.Status -eq 'OK' -and $_.FriendlyName -match 'Bluetooth' -and
+                           $_.FriendlyName -notmatch 'Enumerator' } |
             Select-Object -First 1
         if (-not $bt) { return 'No Bluetooth adapter found' }
         $lmp = $null
@@ -437,11 +486,11 @@ function Get-SystemReport {
             if ($null -ne $prop.Data) { $lmp = [int]$prop.Data }
         } catch {}
         $btVer = switch ($lmp) {
-            0 {'Bluetooth 1.0b'} 1 {'Bluetooth 1.1'} 2 {'Bluetooth 1.2'}
-            3 {'Bluetooth 2.0 + EDR'} 4 {'Bluetooth 2.1 + EDR'} 5 {'Bluetooth 3.0 + HS'}
-            6 {'Bluetooth 4.0'} 7 {'Bluetooth 4.1'} 8 {'Bluetooth 4.2'}
-            9 {'Bluetooth 5.0'} 10 {'Bluetooth 5.1'} 11 {'Bluetooth 5.2'}
-            12 {'Bluetooth 5.3'} 13 {'Bluetooth 5.4'}
+            0  {'Bluetooth 1.0b'}        1  {'Bluetooth 1.1'}           2  {'Bluetooth 1.2'}
+            3  {'Bluetooth 2.0 + EDR'}   4  {'Bluetooth 2.1 + EDR'}    5  {'Bluetooth 3.0 + HS'}
+            6  {'Bluetooth 4.0'}         7  {'Bluetooth 4.1'}           8  {'Bluetooth 4.2'}
+            9  {'Bluetooth 5.0'}         10 {'Bluetooth 5.1'}           11 {'Bluetooth 5.2'}
+            12 {'Bluetooth 5.3'}         13 {'Bluetooth 5.4'}
             default { if ($null -ne $lmp) { "Bluetooth (LMP $lmp)" } else { 'Bluetooth version unknown' } }
         }
         "$btVer -- $($bt.FriendlyName)"
@@ -456,11 +505,12 @@ function Get-SystemReport {
         if ($a) { "Yes -- $($a.InterfaceDescription)" } else { 'Not present' }
     } 'Not present')
 
-    # OS row now also includes Windows activation status
     _Add 'Operating System' (Get-Safe {
-        $o = Get-CimInstance Win32_OperatingSystem
+        $o       = Get-CimInstance Win32_OperatingSystem
         $caption = $o.Caption.Trim()
-        if ($o.BuildNumber -ge 22000 -and $caption -notmatch '11') { $caption = $caption -replace 'Windows 10', 'Windows 11' }
+        if ($o.BuildNumber -ge 22000 -and $caption -notmatch '11') {
+            $caption = $caption -replace 'Windows 10', 'Windows 11'
+        }
         $activation = Get-WindowsActivationStatus
         "{0} (Version {1}, Build {2}) -- {3}" -f $caption, $o.Version, $o.BuildNumber, $activation
     })
@@ -468,7 +518,7 @@ function Get-SystemReport {
     if ($script:IsLaptop) {
         _Add 'Battery Health Percentage' (Get-Safe {
             $full   = Get-CimInstance -Namespace root\wmi -ClassName BatteryFullChargedCapacity -ErrorAction Stop
-            $static = Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData        -ErrorAction Stop
+            $static = Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData         -ErrorAction Stop
             if ($full -and $static -and $static.DesignedCapacity -gt 0) {
                 $fullCap   = ($full   | Measure-Object FullChargedCapacity -Sum).Sum
                 $designCap = ($static | Measure-Object DesignedCapacity    -Sum).Sum
@@ -501,9 +551,9 @@ function Format-ReportAsText {
     $sb.ToString()
 }
 
-# ======================================================================
-#  AUDIO (panned tone generation for speaker test)
-# ======================================================================
+# ══════════════════════════════════════════════════════════════════════════════
+#  AUDIO  (panned tone generator for speaker test)
+# ══════════════════════════════════════════════════════════════════════════════
 function New-PannedToneFile {
     param(
         [string]$Path,
@@ -524,125 +574,94 @@ function New-PannedToneFile {
         $bw.Write([uint32](36 + $dataSize))
         $bw.Write([System.Text.Encoding]::ASCII.GetBytes('WAVE'))
         $bw.Write([System.Text.Encoding]::ASCII.GetBytes('fmt '))
-        $bw.Write([uint32]16)
-        $bw.Write([uint16]1)
-        $bw.Write([uint16]$channels)
-        $bw.Write([uint32]$sampleRate)
+        $bw.Write([uint32]16); $bw.Write([uint16]1)
+        $bw.Write([uint16]$channels); $bw.Write([uint32]$sampleRate)
         $bw.Write([uint32]($sampleRate * $channels * 2))
-        $bw.Write([uint16]($channels * 2))
-        $bw.Write([uint16]$bitsPerSample)
+        $bw.Write([uint16]($channels * 2)); $bw.Write([uint16]$bitsPerSample)
         $bw.Write([System.Text.Encoding]::ASCII.GetBytes('data'))
         $bw.Write([uint32]$dataSize)
-
-        $amp = 16000
-        $twoPiF = 2 * [Math]::PI * $Frequency
+        $amp = 16000; $twoPiF = 2 * [Math]::PI * $Frequency
         $fadeSamples = [int]($sampleRate * 0.025)
-
         for ($i = 0; $i -lt $totalSamples; $i++) {
             $env = 1.0
-            if ($i -lt $fadeSamples)                  { $env = $i / $fadeSamples }
+            if ($i -lt $fadeSamples)                     { $env = $i / $fadeSamples }
             elseif ($i -gt $totalSamples - $fadeSamples) { $env = ($totalSamples - $i) / $fadeSamples }
-
-            $val = [int16]($amp * $env * [Math]::Sin($twoPiF * $i / $sampleRate))
-            $silence = [int16]0
+            $val = [int16]($amp * $env * [Math]::Sin($twoPiF * $i / $sampleRate)); $silence = [int16]0
             switch ($Channel) {
                 'Left'  { $bw.Write($val);    $bw.Write($silence) }
                 'Right' { $bw.Write($silence); $bw.Write($val) }
                 'Both'  { $bw.Write($val);    $bw.Write($val) }
             }
         }
-    } finally {
-        $bw.Close()
-        $fs.Close()
-    }
+    } finally { $bw.Close(); $fs.Close() }
 }
 
-# ======================================================================
-#  LABEL GENERATION (Dymo 89mm x 36mm PDF)
-# ======================================================================
+# ══════════════════════════════════════════════════════════════════════════════
+#  LABEL DATA  (gather fields for printing)
+# ══════════════════════════════════════════════════════════════════════════════
 function Get-ShortCpuName {
     param([string]$Full)
     if (-not $Full) { return 'CPU' }
-    # Common Intel desktop/laptop SKUs: i3-1115G4, i7-13700H, i9-14900K
-    if ($Full -match '\b(i\d-\d{3,5}\w*)\b')                    { return $matches[1] }
-    # Intel Core Ultra: "Core Ultra 7 155H"
-    if ($Full -match '\b(Core\s*Ultra\s*\d+\s*\d{3}\w*)\b')     { return $matches[1] }
-    # Intel Xeon (e.g., "Xeon W-1290P")
-    if ($Full -match '\b(Xeon\s+\S+)\b')                        { return $matches[1] }
-    # AMD Ryzen: "Ryzen 7 5800H", "Ryzen 5 PRO 7530U"
-    if ($Full -match '\b(Ryzen\s+\d(?:\s+PRO)?\s+\d{3,4}\w*)\b'){ return $matches[1] }
-    # Last resort: strip vendor/brand cruft
+    if ($Full -match '\b(i\d-\d{3,5}\w*)\b')                      { return $matches[1] }
+    if ($Full -match '\b(Core\s*Ultra\s*\d+\s*\d{3}\w*)\b')       { return $matches[1] }
+    if ($Full -match '\b(Xeon\s+\S+)\b')                          { return $matches[1] }
+    if ($Full -match '\b(Ryzen\s+\d(?:\s+PRO)?\s+\d{3,4}\w*)\b')  { return $matches[1] }
     $clean = $Full -replace 'Intel\(R\)|Core\(TM\)|AMD|\(R\)|\(TM\)|CPU|Processor|@.*$|\d+(?:\.\d+)?\s*GHz', ''
     return ($clean -replace '\s+', ' ').Trim()
 }
 
 function Get-LabelStorageSummary {
-    # Returns "512GB SSD", "1TB SSD + 2TB HDD", etc. Internal disks only.
     $disks = Get-PhysicalDisk -ErrorAction SilentlyContinue | Where-Object { $_.BusType -ne 'USB' }
     if (-not $disks) { return 'Storage Unknown' }
-
-    $ssdBytes = ($disks | Where-Object MediaType -eq 'SSD' | Measure-Object Size -Sum).Sum
-    $hddBytes = ($disks | Where-Object MediaType -eq 'HDD' | Measure-Object Size -Sum).Sum
+    $ssdBytes   = ($disks | Where-Object MediaType -eq 'SSD' | Measure-Object Size -Sum).Sum
+    $hddBytes   = ($disks | Where-Object MediaType -eq 'HDD' | Measure-Object Size -Sum).Sum
     $otherBytes = ($disks | Where-Object { $_.MediaType -ne 'SSD' -and $_.MediaType -ne 'HDD' } | Measure-Object Size -Sum).Sum
-
-    # Snap reported binary size to the marketing/consumer-friendly size that
-    # matches what's printed on the box (953 GiB -> "1TB").
     function _Pretty([Int64]$bytes) {
         if (-not $bytes) { return $null }
         $gib = $bytes / 1GB
-        if     ($gib -lt 100)    { '{0:0}GB' -f $gib }
-        elseif ($gib -lt 200)    { '128GB' }
-        elseif ($gib -lt 350)    { '256GB' }
-        elseif ($gib -lt 700)    { '512GB' }
-        elseif ($gib -lt 1400)   { '1TB' }
-        elseif ($gib -lt 2700)   { '2TB' }
-        elseif ($gib -lt 5500)   { '4TB' }
-        elseif ($gib -lt 11000)  { '8TB' }
-        elseif ($gib -lt 22000)  { '16TB' }
-        else                     { '{0:0}TB' -f ($gib / 1024) }
+        if     ($gib -lt 100)   { '{0:0}GB'  -f $gib }
+        elseif ($gib -lt 200)   { '128GB' }   elseif ($gib -lt 350)   { '256GB' }
+        elseif ($gib -lt 700)   { '512GB' }   elseif ($gib -lt 1400)  { '1TB'   }
+        elseif ($gib -lt 2700)  { '2TB'   }   elseif ($gib -lt 5500)  { '4TB'   }
+        elseif ($gib -lt 11000) { '8TB'   }   elseif ($gib -lt 22000) { '16TB'  }
+        else                    { '{0:0}TB' -f ($gib / 1024) }
     }
-
     $parts = @()
-    if ($ssdBytes)   { $parts += "$(_Pretty $ssdBytes) SSD" }
-    if ($hddBytes)   { $parts += "$(_Pretty $hddBytes) HDD" }
+    if ($ssdBytes)   { $parts += "$(_Pretty $ssdBytes) SSD"     }
+    if ($hddBytes)   { $parts += "$(_Pretty $hddBytes) HDD"     }
     if ($otherBytes) { $parts += "$(_Pretty $otherBytes) Storage" }
     if (-not $parts) { return 'Storage Unknown' }
     return ($parts -join ' + ')
 }
 
 function Get-LabelDisplaySummary {
-    $sizeStr = ''; $resStr = ''; $touchStr = ''
-
+    $sizeStr = ''; $resStr = ''
     try {
-        $m = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction Stop | Select-Object -First 1
+        $m = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction Stop |
+            Select-Object -First 1
         if ($m -and $m.MaxHorizontalImageSize -and $m.MaxVerticalImageSize) {
-            $wCm = [double]$m.MaxHorizontalImageSize
-            $hCm = [double]$m.MaxVerticalImageSize
-            $inches = [Math]::Sqrt(($wCm*$wCm)+($hCm*$hCm)) / 2.54
-            $sizeStr = '{0:N1}"' -f $inches
+            $wCm = [double]$m.MaxHorizontalImageSize; $hCm = [double]$m.MaxVerticalImageSize
+            $sizeStr = '{0:N1}"' -f ([Math]::Sqrt(($wCm*$wCm)+($hCm*$hCm)) / 2.54)
         }
     } catch {}
-
     try {
         $modes = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorListedSupportedSourceModes -ErrorAction Stop
-        $best = $modes | ForEach-Object {
-            $_.MonitorSourceModes | Sort-Object { $_.HorizontalActivePixels * $_.VerticalActivePixels } -Descending |
+        $best  = $modes | ForEach-Object {
+            $_.MonitorSourceModes |
+                Sort-Object { $_.HorizontalActivePixels * $_.VerticalActivePixels } -Descending |
                 Select-Object -First 1
         } | Sort-Object { $_.HorizontalActivePixels * $_.VerticalActivePixels } -Descending | Select-Object -First 1
         if ($best) { $resStr = '{0}x{1}' -f $best.HorizontalActivePixels, $best.VerticalActivePixels }
     } catch {}
-
     if (-not $resStr) {
         $vc = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
             Where-Object { $_.CurrentHorizontalResolution -gt 0 } | Select-Object -First 1
         if ($vc) { $resStr = '{0}x{1}' -f $vc.CurrentHorizontalResolution, $vc.CurrentVerticalResolution }
     }
-
     $touch = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
         Where-Object { $_.Status -eq 'OK' -and $_.FriendlyName -match 'touch screen|HID-compliant touch screen' } |
         Select-Object -First 1
-    if ($touch) { $touchStr = ' touchscreen' }
-
+    $touchStr = if ($touch) { ' touchscreen' } else { '' }
     $parts = @($sizeStr, $resStr) | Where-Object { $_ }
     if (-not $parts) { return 'Display Unknown' }
     return (($parts -join ' ') + $touchStr).Trim()
@@ -651,38 +670,27 @@ function Get-LabelDisplaySummary {
 function Get-LabelGpuSummary {
     param([string]$DedicatedGpuFull)
     if (-not $DedicatedGpuFull -or $DedicatedGpuFull -eq 'None') { return $null }
-    # Trim parentheticals like "(Notebook)" and squeeze whitespace
-    $s = $DedicatedGpuFull -replace '\([^)]+\)', ''
-    $s = $s -replace '^\s*NVIDIA\s+', ''
-    $s = $s -replace '\s+', ' '
+    $s = $DedicatedGpuFull -replace '\([^)]+\)', '' -replace '^\s*NVIDIA\s+', '' -replace '\s+', ' '
     return $s.Trim()
 }
 
 function Get-LabelBatterySummary {
-    <# Returns "Battery: 87%" or $null if unavailable. #>
     try {
         $full   = Get-CimInstance -Namespace root\wmi -ClassName BatteryFullChargedCapacity -ErrorAction Stop
-        $static = Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData        -ErrorAction Stop
+        $static = Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData         -ErrorAction Stop
         if ($full -and $static -and $static.DesignedCapacity -gt 0) {
             $fullCap   = ($full   | Measure-Object FullChargedCapacity -Sum).Sum
             $designCap = ($static | Measure-Object DesignedCapacity    -Sum).Sum
-            $pct = [Math]::Round(($fullCap / $designCap) * 100, 0)
-            return "Battery: $pct%"
+            return "Battery: $([Math]::Round(($fullCap / $designCap) * 100, 0))%"
         }
     } catch {}
     return $null
 }
 
 function Get-LabelData {
-    # Pull raw data once and shape it into label fields. Fields that don't
-    # apply (display/battery on a desktop) come back as $null and the PDF
-    # renderer skips them.
-    $cs = Get-CimInstance Win32_ComputerSystem
-    $cpuFull = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
+    $cs       = Get-CimInstance Win32_ComputerSystem
+    $cpuFull  = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
     $isLaptop = Test-IsLaptop
-
-    # Model only — strip manufacturer. Lenovo uses ComputerSystemProduct.Version
-    # for the user-friendly product name (e.g., "ThinkPad T14 Gen 3").
     $modelLine = ''
     try {
         $cs2 = Get-CimInstance Win32_ComputerSystemProduct
@@ -690,17 +698,7 @@ function Get-LabelData {
     } catch {}
     if (-not $modelLine) { $modelLine = $cs.Model }
     $modelLine = ($modelLine -replace '\s+', ' ').Trim()
-
-    $ramGB = [Math]::Round($cs.TotalPhysicalMemory / 1GB, 0)
-    $cpuShort = Get-ShortCpuName $cpuFull
-    $storageShort = Get-LabelStorageSummary
-    $specsLine = "$cpuShort / ${ramGB}GB RAM / $storageShort"
-
-    # Display only on portable machines
-    $displayLine = $null
-    if ($isLaptop) { $displayLine = Get-LabelDisplaySummary }
-
-    # Reuse the same dGPU detection used for the on-screen report
+    $ramGB     = [Math]::Round($cs.TotalPhysicalMemory / 1GB, 0)
     $dedicated = $null
     try {
         $vcs = Get-CimInstance Win32_VideoController |
@@ -711,169 +709,504 @@ function Get-LabelData {
             $_.Name -match 'Intel.*\bArc\b.*A\d{3}'
         } | Select-Object -First 1 -ExpandProperty Name)
     } catch {}
-    $gpuLine = Get-LabelGpuSummary $dedicated
-
-    # Battery only on portable machines
-    $batteryLine = $null
-    if ($isLaptop) { $batteryLine = Get-LabelBatterySummary }
-
     [PSCustomObject]@{
         Model   = $modelLine
-        Specs   = $specsLine
-        Display = $displayLine
-        Gpu     = $gpuLine
-        Battery = $batteryLine
+        Specs   = "$(Get-ShortCpuName $cpuFull) / ${ramGB}GB RAM / $(Get-LabelStorageSummary)"
+        Display = if ($isLaptop) { Get-LabelDisplaySummary  } else { $null }
+        Gpu     = Get-LabelGpuSummary $dedicated
+        Battery = if ($isLaptop) { Get-LabelBatterySummary  } else { $null }
     }
 }
 
-function Format-PdfString {
-    # Escape text for a PDF literal string and force ASCII (built-in
-    # Helvetica is WinAnsi-encoded; non-ASCII would render as garbage).
-    param([string]$s)
-    if (-not $s) { return '' }
-    $s = $s -replace '\\', '\\\\'
-    $s = $s -replace '\(',  '\('
-    $s = $s -replace '\)',  '\)'
-    $sb = New-Object System.Text.StringBuilder
-    foreach ($ch in $s.ToCharArray()) {
-        $code = [int]$ch
-        if ($code -ge 32 -and $code -le 126) { [void]$sb.Append($ch) }
-        else { [void]$sb.Append('?') }
-    }
-    return $sb.ToString()
-}
-
-function New-DymoLabelPdf {
+# ══════════════════════════════════════════════════════════════════════════════
+#  LABEL BITMAP  (rendered via System.Drawing — bypasses QZ Tray HTML engine)
+# ══════════════════════════════════════════════════════════════════════════════
+function New-LabelBitmap {
     <#
-      Writes a PDF label sized 89mm x 36mm. Lines below the model are
-      optional — pass $null/empty for any that don't apply. Built byte-by-
-      byte so we don't need any external libraries; the resulting PDF is
-      under 1 KB.
+      Renders the label as a 300-DPI PNG bitmap and returns it as a Base64
+      string ready for QZ Tray's pixel/image/base64 print format.
+      Using System.Drawing here means we never rely on QZ Tray's Java WebView
+      renderer, which can silently fail on some Windows configurations.
+
+      The bitmap is always drawn in LANDSCAPE orientation (LabelWidthMm wide ×
+      LabelHeightMm tall) so each text line gets the full LabelWidthMm of
+      horizontal room — important for long spec strings.
+
+      When $Settings.RotateLabel90 is true, the finished bitmap is rotated
+      90° clockwise into a portrait orientation (LabelHeightMm × LabelWidthMm)
+      before encoding. This is needed when the printer driver expects the
+      label paper in portrait — common for DYMO 99017-style file folder
+      labels where the driver's natural orientation is 12mm × 50mm.
+      Invoke-QzPrint swaps width/height in the print params to match.
+    #>
+    param($LabelData, [string]$Notes, $Settings)
+
+    $dpi = 300
+
+    # ALWAYS draw in landscape: text lines run across the long dimension
+    # (LabelWidthMm) and stack down the short dimension (LabelHeightMm).
+    $wPx = [int]($Settings.LabelWidthMm  / 25.4 * $dpi)
+    $hPx = [int]($Settings.LabelHeightMm / 25.4 * $dpi)
+
+    # Collect content lines
+    $bodyLines = @($LabelData.Specs)
+    if ($LabelData.Display) { $bodyLines += $LabelData.Display }
+    if ($LabelData.Gpu)     { $bodyLines += $LabelData.Gpu }
+    if ($LabelData.Battery) { $bodyLines += $LabelData.Battery }
+
+    $noteLines = @()
+    if ($Notes -and $Notes.Trim()) {
+        $noteLines = ($Notes -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -First 3
+    }
+    $hasNotes = $noteLines.Count -gt 0
+
+    # Font sizes in points — scale down if many lines
+    $totalLines = 1 + $bodyLines.Count + $(if ($hasNotes) { $noteLines.Count + 1 } else { 0 })
+    if     ($totalLines -le 5) { $mPt = 10;  $bPt = 8;   $nPt = 7   }
+    elseif ($totalLines -le 7) { $mPt = 9;   $bPt = 7.5; $nPt = 6.5 }
+    else                       { $mPt = 8;   $bPt = 7;   $nPt = 6   }
+
+    $bmp = New-Object System.Drawing.Bitmap($wPx, $hPx)
+    $bmp.SetResolution($dpi, $dpi)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.Clear([System.Drawing.Color]::White)
+    $g.SmoothingMode     = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAlias
+
+    try {
+        $fModel = New-Object System.Drawing.Font('Arial', $mPt, ([System.Drawing.FontStyle]::Bold),    [System.Drawing.GraphicsUnit]::Point)
+        $fBody  = New-Object System.Drawing.Font('Arial', $bPt, ([System.Drawing.FontStyle]::Regular), [System.Drawing.GraphicsUnit]::Point)
+        $fNotes = New-Object System.Drawing.Font('Arial', $nPt, ([System.Drawing.FontStyle]::Italic),  [System.Drawing.GraphicsUnit]::Point)
+        $brush  = [System.Drawing.Brushes]::Black
+        $sfmt   = New-Object System.Drawing.StringFormat
+        $sfmt.Trimming    = [System.Drawing.StringTrimming]::EllipsisCharacter
+        $sfmt.FormatFlags = [System.Drawing.StringFormatFlags]::NoWrap
+
+        try {
+            $padX = [Math]::Max(4, [int]($wPx * 0.02))
+            $padY = [Math]::Max(3, [int]($hPx * 0.05))
+            $cw   = $wPx - 2 * $padX
+            $cy   = $padY
+
+            # ── Model line (bold) ─────────────────────────────────────────────
+            $mH = $fModel.GetHeight($g)
+            $g.DrawString($LabelData.Model, $fModel, $brush,
+                [System.Drawing.RectangleF]::new($padX, $cy, $cw, $mH * 1.3), $sfmt)
+            $cy += [int]($mH * 1.15)
+
+            # ── Spec / detail lines ───────────────────────────────────────────
+            $bH = $fBody.GetHeight($g)
+            foreach ($line in $bodyLines) {
+                if ($cy + $bH -gt $hPx - $padY) { break }
+                $g.DrawString($line, $fBody, $brush,
+                    [System.Drawing.RectangleF]::new($padX, $cy, $cw, $bH * 1.3), $sfmt)
+                $cy += [int]($bH * 1.15)
+            }
+
+            # ── Notes (separator + italic lines) ─────────────────────────────
+            $nH = $fNotes.GetHeight($g)
+            if ($hasNotes -and $cy + 6 + $nH -le $hPx - $padY) {
+                $cy += 3
+                $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::Black, 1)
+                $g.DrawLine($pen, $padX, $cy, ($padX + $cw), $cy)
+                $pen.Dispose()
+                $cy += 4
+
+                foreach ($nl in $noteLines) {
+                    if ($cy + $nH -gt $hPx - $padY) { break }
+                    $g.DrawString($nl, $fNotes, $brush,
+                        [System.Drawing.RectangleF]::new($padX, $cy, $cw, $nH * 1.3), $sfmt)
+                    $cy += [int]($nH * 1.15)
+                }
+            }
+        } finally {
+            $fModel.Dispose(); $fBody.Dispose(); $fNotes.Dispose(); $sfmt.Dispose()
+        }
+    } finally {
+        $g.Dispose()
+    }
+
+    # When RotateLabel90 is true, rotate the finished landscape bitmap 90°
+    # clockwise into portrait. Use this when the printer driver expects
+    # portrait-oriented paper (typical for DYMO 99017 file folder labels).
+    # Invoke-QzPrint swaps width/height in the print params to match.
+    if ($Settings.RotateLabel90 -eq $true) {
+        $bmp.RotateFlip([System.Drawing.RotateFlipType]::Rotate90FlipNone)
+    }
+
+    # Save a copy of the final bitmap to disk for diagnostic inspection. The
+    # file is overwritten each print and is useful when the printed output
+    # doesn't match expectations — open it to see what was actually sent.
+    try {
+        $previewPath = Join-Path $script:AppDir 'label-preview.png'
+        $bmp.Save($previewPath, [System.Drawing.Imaging.ImageFormat]::Png)
+    } catch {}
+
+    # Encode bitmap as Base64 PNG
+    $ms = New-Object System.IO.MemoryStream
+    try {
+        $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+        $b64 = [Convert]::ToBase64String($ms.ToArray())
+    } finally {
+        $bmp.Dispose(); $ms.Dispose()
+    }
+    return $b64
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  QZ TRAY  (WebSocket client + RSA signing)
+# ══════════════════════════════════════════════════════════════════════════════
+function Get-QzCredentials {
+    <#
+      Loads the certificate and private key from the embedded PEM strings.
+      Uses Windows CNG (CngKey.Import) to handle PKCS#8 keys — avoids the
+      .NET 7 vs .NET Framework PFX encryption incompatibility entirely.
+    #>
+    if ($script:EmbeddedCertPem -like '*REPLACE_*') {
+        throw ("QZ Tray certificate not configured.`n`n" +
+               "Copy QZ_CERT and QZ_PRIVATE_KEY from the web app's app.js " +
+               "into the constants at the top of this script.")
+    }
+
+    # ── Certificate (public part) ─────────────────────────────────────────────
+    $certPem = $script:EmbeddedCertPem.Trim() + "`n"
+
+    # ── Private key via Windows CNG  (PKCS#8, .NET 4.6+ / .NET 5+) ──────────
+    $keyClean = ($script:EmbeddedKeyPem -replace '-----BEGIN PRIVATE KEY-----','') -replace '-----END PRIVATE KEY-----',''
+    $keyClean = ($keyClean -replace "`r",'') -replace "`n",'' -replace ' ',''
+    $keyBytes = [Convert]::FromBase64String($keyClean)
+
+    try {
+        $cngKey = [System.Security.Cryptography.CngKey]::Import(
+                      $keyBytes,
+                      [System.Security.Cryptography.CngKeyBlobFormat]::Pkcs8PrivateBlob)
+        $rsaKey = New-Object System.Security.Cryptography.RSACng($cngKey)
+    } catch {
+        throw ("Could not import the RSA private key.`n" +
+               "Ensure the key PEM is the unencrypted PKCS#8 block from app.js.`n" +
+               "Detail: $($_.Exception.Message)")
+    }
+
+    return [PSCustomObject]@{ CertPem = $certPem; Rsa = $rsaKey }
+}
+
+function Wait-WSTask {
+    <#
+      Polls a WebSocket Task to completion while pumping WinForms messages so
+      the UI stays responsive. Replaces synchronous .GetAwaiter().GetResult()
+      which would block the UI thread for the duration of the I/O.
+
+      Returns the completed task's result. Throws any task exception just like
+      GetAwaiter().GetResult() would.
+    #>
+    param([System.Threading.Tasks.Task]$Task)
+    while (-not $Task.IsCompleted) {
+        [System.Windows.Forms.Application]::DoEvents()
+        Start-Sleep -Milliseconds 20
+    }
+    # GetAwaiter().GetResult() unwraps the result and re-throws any exception
+    return $Task.GetAwaiter().GetResult()
+}
+
+function Invoke-QzCall {
+    <#
+      Connects to QZ Tray, sends a certificate-signed call, reads responses
+      until a UID-matching COMPLETE/ERROR is found, then closes.
+
+      Uses the QZ Tray Demo Cert which is registered as a fully-trusted root
+      via the Site Manager 'Create New' wizard.  No Allow/Block dialog;
+      prints immediately.
     #>
     param(
-        [Parameter(Mandatory)] [string] $Path,
-        [Parameter(Mandatory)] [string] $ModelLine,
-        [Parameter(Mandatory)] [string] $SpecsLine,
-        [string] $DisplayLine = '',
-        [string] $GpuLine     = '',
-        [string] $BatteryLine = ''
+        [string] $Call,
+        [object] $Params,
+        $Settings,
+        $Credentials,
+        [int]    $TimeoutMs = 6000
     )
 
-    # 1mm = 2.83465 points; 89x36 mm rounds to 252.28 x 102.05 pt
-    $pageW = 252.28
-    $pageH = 102.05
+    $scheme = if ($Settings.UseSecureWs) { 'wss' } else { 'ws' }
+    $uri    = [Uri]"${scheme}://$($Settings.QzHost):$($Settings.QzPort)"
 
-    # Build the optional body lines in order
-    $bodyTexts = @()
-    $bodyTexts += $SpecsLine
-    if ($DisplayLine) { $bodyTexts += $DisplayLine }
-    if ($GpuLine)     { $bodyTexts += $GpuLine }
-    if ($BatteryLine) { $bodyTexts += $BatteryLine }
-
-    # Pick font sizes that comfortably fit the number of lines. The label
-    # is ~36mm tall (102 pt) with ~5mm safe margins top/bottom.
-    $totalLines = 1 + $bodyTexts.Count   # bold model + body
-    if     ($totalLines -le 3) { $modelSize = 12; $bodySize = 10; $bodyLead = 14 }
-    elseif ($totalLines -eq 4) { $modelSize = 11; $bodySize = 9;  $bodyLead = 13 }
-    else                       { $modelSize = 10; $bodySize = 8;  $bodyLead = 11 }
-
-    $modelText = Format-PdfString $ModelLine
-    $bodyTextsEsc = $bodyTexts | ForEach-Object { Format-PdfString $_ }
-
-    # Layout (PDF origin is bottom-left). Y position calculated to top-align.
-    $startY = $pageH - 6 - $modelSize
-    $contentLines = @(
-        'BT'
-        "/F2 $modelSize Tf"          # Helvetica-Bold
-        "6 $startY Td"
-        "($modelText) Tj"
-        "/F1 $bodySize Tf"           # Helvetica
-    )
-    foreach ($t in $bodyTextsEsc) {
-        $contentLines += "0 -$bodyLead Td"
-        $contentLines += "($t) Tj"
+    # ── Connect ───────────────────────────────────────────────────────────────
+    $ws      = New-Object System.Net.WebSockets.ClientWebSocket
+    # Intentionally NOT setting an Origin header. .NET ClientWebSocket will then
+    # not send one, which matches how QZ Tray's own utility clients connect.
+    # Custom Origins appear to interfere with QZ Tray's signature verification path.
+    $connCts = New-Object System.Threading.CancellationTokenSource(6000)
+    try {
+        Wait-WSTask -Task ($ws.ConnectAsync($uri, $connCts.Token)) | Out-Null
+    } catch {
+        $ws.Dispose(); $connCts.Dispose()
+        throw ("Cannot reach QZ Tray at $uri.`n" +
+               "Verify the host/port in Settings and that QZ Tray is running on the print server.")
     }
-    $contentLines += 'ET'
+    $connCts.Dispose()
 
-    $contentStr   = ($contentLines -join "`n") + "`n"
-    $contentBytes = [System.Text.Encoding]::ASCII.GetBytes($contentStr)
-    $contentLen   = $contentBytes.Length
+    try {
+        $epoch = [DateTimeOffset]::new(1970, 1, 1, 0, 0, 0, [TimeSpan]::Zero)
 
-    $ms     = New-Object System.IO.MemoryStream
-    $writer = New-Object System.IO.BinaryWriter($ms, [System.Text.Encoding]::ASCII)
+        # ── Step 0: getVersion handshake (required by QZ Tray protocol) ────────
+        # The qz-tray.js library always sends getVersion as the very first message
+        # before certificate registration. Without it QZ Tray reports "Bad signature"
+        # even when the signature is cryptographically correct, because the cert isn't
+        # properly associated with the connection for subsequent verification.
+        $gvUid  = [Guid]::NewGuid().ToString('N')
+        $gvTs   = [long]([DateTimeOffset]::UtcNow - $epoch).TotalMilliseconds
+        $gvMsg  = [ordered]@{
+            call      = 'getVersion'
+            timestamp = $gvTs
+            uid       = $gvUid
+            position  = [ordered]@{ x = 100; y = 100 }
+        }
+        $gvJson  = $gvMsg | ConvertTo-Json -Depth 3 -Compress
+        $gvJson  = $gvJson -replace '/', '\/'
+        $gvBytes = [System.Text.Encoding]::UTF8.GetBytes($gvJson)
+        $gvSeg   = [ArraySegment[byte]]::new($gvBytes)
+        $sendCts0 = New-Object System.Threading.CancellationTokenSource(5000)
+        try   { Wait-WSTask -Task ($ws.SendAsync($gvSeg, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $sendCts0.Token)) | Out-Null }
+        finally { $sendCts0.Dispose() }
 
-    # Helpers for byte-level output. Defined inline so they capture $writer/$ms.
-    function _WL([string]$s) {
-        $bytes = [System.Text.Encoding]::ASCII.GetBytes($s)
-        $writer.Write($bytes)
-        $writer.Write([byte]10)   # LF
+        # ── Step 1: Send certificate-only message (pre-register cert) ─────────
+        # Certificate is sent as a SEPARATE message before any signed call.
+        Start-Sleep -Milliseconds 50
+        $certTs  = [long]([DateTimeOffset]::UtcNow - $epoch).TotalMilliseconds
+        $certUid = [Guid]::NewGuid().ToString('N')
+        $certMsg = [ordered]@{
+            certificate = $Credentials.CertPem
+            timestamp   = $certTs
+            uid         = $certUid
+            position    = [ordered]@{ x = 100; y = 100 }
+        }
+        $certJson  = $certMsg | ConvertTo-Json -Depth 3 -Compress
+        $certJson  = $certJson -replace '/', '\/'
+        $certBytes = [System.Text.Encoding]::UTF8.GetBytes($certJson)
+        $certSeg   = [ArraySegment[byte]]::new($certBytes)
+        $sendCts1  = New-Object System.Threading.CancellationTokenSource(5000)
+        try   { Wait-WSTask -Task ($ws.SendAsync($certSeg, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $sendCts1.Token)) | Out-Null }
+        finally { $sendCts1.Dispose() }
+
+        # Brief pause — gives QZ Tray time to process the cert before the call
+        Start-Sleep -Milliseconds 100
+
+        # ── Step 2: Build signed call WITHOUT embedding the certificate ────────
+        $uid   = [Guid]::NewGuid().ToString('N')
+        $ts    = [long]([DateTimeOffset]::UtcNow - $epoch).TotalMilliseconds
+
+        # ── BUILD THE STRING TO SIGN ──────────────────────────────────────────
+        # qz-tray.js signs SHA256-hex of JSON({call, params, timestamp}), NOT
+        # the timestamp alone. Reference: qz-tray.js source —
+        #   var signObj = { call: obj.call, params: obj.params, timestamp: obj.timestamp };
+        #   var hashing = _qz.tools.hash(_qz.tools.stringify(signObj));
+        #   hashing.then(hashed => _qz.security.callSign(hashed));
+        # In 2.1+, _qz.tools.hash defaults to SHA256 producing lowercase hex.
+        # The signer (SHA512withRSA / PKCS1) signs the UTF-8 bytes of that hex.
+        #
+        # CRITICAL: do NOT escape forward slashes in the signing JSON. QZ Tray's
+        # validSignature() in PrintSocketClient.java does:
+        #   copy.toString().replaceAll("\\\\/", "/")
+        # i.e. it strips any \/ back to bare / BEFORE hashing. To match, we
+        # must hash JSON containing bare / characters (no \/ escape). Base64
+        # data is full of /'s so this matters a lot.
+        $signObj = [ordered]@{
+            call      = $Call
+            params    = $Params
+            timestamp = $ts
+        }
+        $signJson = $signObj | ConvertTo-Json -Depth 20 -Compress
+
+        # SHA256 → lowercase hex (qz-tray.js convention)
+        $sha256alg = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $signJsonBytes = [System.Text.Encoding]::UTF8.GetBytes($signJson)
+            $hashBytes     = $sha256alg.ComputeHash($signJsonBytes)
+        } finally { $sha256alg.Dispose() }
+        $sha256Hex = -join ($hashBytes | ForEach-Object { $_.ToString('x2') })
+
+        # Sign the hex string bytes with SHA512+RSA+PKCS1
+        $toSign = [System.Text.Encoding]::UTF8.GetBytes($sha256Hex)
+        if ($Credentials.Rsa -is [System.Security.Cryptography.RSACryptoServiceProvider]) {
+            $sha512 = New-Object System.Security.Cryptography.SHA512CryptoServiceProvider
+            $sigB64 = [Convert]::ToBase64String($Credentials.Rsa.SignData($toSign, $sha512))
+            $sha512.Dispose()
+        } else {
+            $sigB64 = [Convert]::ToBase64String(
+                $Credentials.Rsa.SignData($toSign,
+                    [System.Security.Cryptography.HashAlgorithmName]::SHA512,
+                    [System.Security.Cryptography.RSASignaturePadding]::Pkcs1))
+        }
+
+        # Debug log: capture exactly what was signed so we can verify externally
+        try {
+            $sigDbg = "[$(Get-Date -Format 'HH:mm:ss.fff')] SIGN | signJson=$signJson | sha256Hex=$sha256Hex | sigB64=$sigB64"
+            Add-Content -LiteralPath (Join-Path $script:AppDir 'qz-debug.log') -Value $sigDbg -Encoding UTF8
+        } catch {}
+
+        # Field order matches qz-tray.js exactly: call, params, signature, timestamp,
+        # uid, position, signAlgorithm. Some QZ Tray parsers appear order-sensitive.
+        $msg = [ordered]@{
+            call          = $Call
+            params        = $Params
+            signature     = $sigB64
+            timestamp     = $ts
+            uid           = $uid
+            position      = [ordered]@{ x = 100; y = 100 }
+            signAlgorithm = 'SHA512'
+            # certificate intentionally omitted — pre-registered above
+        }
+        $json    = $msg | ConvertTo-Json -Depth 10 -Compress
+        # Escape forward slashes as \/ to exactly match qz-tray.js JSON output.
+        # JSON spec treats both as equivalent but some parsers are strict.
+        $json    = $json -replace '/', '\/'
+        $txBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+        $txSeg   = [ArraySegment[byte]]::new($txBytes)
+
+        $sendCts = New-Object System.Threading.CancellationTokenSource(5000)
+        try   { Wait-WSTask -Task ($ws.SendAsync($txSeg, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $sendCts.Token)) | Out-Null }
+        finally { $sendCts.Dispose() }
+
+        # ── Read until we match our UID (QZ Tray may send other frames first) ─
+        # Receive loop: wait for COMPLETE/ERROR matching our UIDs (up to $TimeoutMs).
+        # With proper signing in place, QZ Tray sends a COMPLETE within ~300ms
+        # of receiving the print message. The OperationCanceledException catch
+        # below is defensive in case QZ Tray ever drops the connection without
+        # a final frame.
+        $recvCts = New-Object System.Threading.CancellationTokenSource($TimeoutMs)
+        $recvBuf = New-Object byte[] 65536
+        try {
+            while ($true) {
+                $recvSeg    = [ArraySegment[byte]]::new($recvBuf)
+                $recvResult = Wait-WSTask -Task ($ws.ReceiveAsync($recvSeg, $recvCts.Token))
+
+                if ($recvResult.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) {
+                    # Connection closed without ERROR — print likely succeeded
+                    return ([PSCustomObject]@{
+                        uid    = $uid
+                        type   = 'COMPLETE'
+                        result = 'Connection closed by QZ Tray after dispatch'
+                    })
+                }
+
+                $responseJson = [System.Text.Encoding]::UTF8.GetString($recvBuf, 0, $recvResult.Count)
+
+                # ── Debug log every received frame ────────────────────────────
+                try {
+                    $dbgLine = "[$(Get-Date -Format 'HH:mm:ss.fff')] RECV $($recvResult.Count)b | want-uid=$uid | raw=$responseJson"
+                    Add-Content -LiteralPath (Join-Path $script:AppDir 'qz-debug.log') -Value $dbgLine -Encoding UTF8
+                } catch {}
+
+                try   { $resp = $responseJson | ConvertFrom-Json }
+                catch { continue }   # Non-JSON frame — skip
+
+                # Accept responses for either the print call UID or the cert pre-reg UID.
+                if ($resp.uid -ne $uid -and $resp.uid -ne $certUid) { continue }
+
+                if ($resp.PSObject.Properties['type']) {
+                    if ($resp.type -eq 'ERROR') { throw "QZ Tray error: $($resp.result)" }
+                    return $resp
+                }
+
+                continue   # bare UID ack — keep waiting
+            }
+        } catch [System.OperationCanceledException] {
+            # Defensive — should not be hit during normal signed flow. If we get
+            # here the print may or may not have happened; the user can retry.
+            return ([PSCustomObject]@{
+                uid    = $uid
+                type   = 'COMPLETE'
+                result = 'Dispatched (no COMPLETE response received)'
+            })
+        } finally {
+            $recvCts.Dispose()
+        }
+
+    } finally {
+        # Polite close — only attempt if the socket is still in a closeable state
+        try {
+            $closeable = @([System.Net.WebSockets.WebSocketState]::Open,
+                           [System.Net.WebSockets.WebSocketState]::CloseReceived)
+            if ($ws.State -in $closeable) {
+                $closeCts = New-Object System.Threading.CancellationTokenSource(2000)
+                $ws.CloseAsync([System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure, 'Done',
+                               $closeCts.Token).Wait(2500) | Out-Null
+                $closeCts.Dispose()
+            }
+        } catch {}
+        $ws.Dispose()
     }
-    function _Pos { return [int]$ms.Position }
-
-    _WL '%PDF-1.4'
-    # Binary marker — 4 bytes >= 128 telling viewers this isn't a text PDF
-    $writer.Write([byte[]]@(37, 226, 227, 207, 211, 10))
-
-    $offsets = @{}
-
-    $offsets[1] = _Pos
-    _WL '1 0 obj'
-    _WL '<< /Type /Catalog /Pages 2 0 R >>'
-    _WL 'endobj'
-
-    $offsets[2] = _Pos
-    _WL '2 0 obj'
-    _WL '<< /Type /Pages /Kids [3 0 R] /Count 1 >>'
-    _WL 'endobj'
-
-    $offsets[3] = _Pos
-    _WL '3 0 obj'
-    _WL ("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {0} {1}] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>" -f $pageW, $pageH)
-    _WL 'endobj'
-
-    $offsets[4] = _Pos
-    _WL '4 0 obj'
-    _WL '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>'
-    _WL 'endobj'
-
-    $offsets[5] = _Pos
-    _WL '5 0 obj'
-    _WL '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>'
-    _WL 'endobj'
-
-    $offsets[6] = _Pos
-    _WL '6 0 obj'
-    _WL ("<< /Length {0} >>" -f $contentLen)
-    _WL 'stream'
-    $writer.Write($contentBytes)
-    _WL 'endstream'
-    _WL 'endobj'
-
-    $xrefPos = _Pos
-    _WL 'xref'
-    _WL '0 7'
-    # PDF spec: each xref entry is exactly 20 bytes including the LF.
-    # The 19-char body below + LF written by _WL = 20 bytes.
-    _WL '0000000000 65535 f '
-    for ($i = 1; $i -le 6; $i++) {
-        _WL ("{0:D10} 00000 n " -f $offsets[$i])
-    }
-
-    _WL 'trailer'
-    _WL '<< /Size 7 /Root 1 0 R >>'
-    _WL 'startxref'
-    _WL "$xrefPos"
-    _WL '%%EOF'
-
-    $writer.Flush()
-    [System.IO.File]::WriteAllBytes($Path, $ms.ToArray())
-    $writer.Close()
-    $ms.Close()
 }
 
-# ======================================================================
+function Get-QzPrinterList {
+    param($Settings, $Credentials)
+    $resp = Invoke-QzCall -Call 'printers.find' -Params ([ordered]@{ query = '' }) `
+                          -Settings $Settings -Credentials $Credentials -TimeoutMs 8000
+    if ($null -eq $resp.result) { return @() }
+    return @($resp.result | ForEach-Object { "$_" })
+}
+
+function Invoke-QzPrint {
+    param([string]$ImageBase64, $Settings, $Credentials)
+    <#
+      Send the full options structure that QZ Tray 2.2.x JS API generates.
+      QZ Tray 2.2.x validates the params object and silently drops the job
+      when expected fields (legacy, rasterize, spool, etc.) are absent.
+
+      When RotateLabel90 is on, New-LabelBitmap produces a portrait-oriented
+      bitmap, so we tell QZ Tray the page is portrait (swap width/height)
+      to match what the printer driver expects.
+    #>
+    if ($Settings.RotateLabel90 -eq $true) {
+        # Portrait: short dimension is width, long dimension is height
+        $wIn = [Math]::Round($Settings.LabelHeightMm / 25.4, 4)
+        $hIn = [Math]::Round($Settings.LabelWidthMm  / 25.4, 4)
+    } else {
+        # Landscape: long dimension is width, short dimension is height
+        $wIn = [Math]::Round($Settings.LabelWidthMm  / 25.4, 4)
+        $hIn = [Math]::Round($Settings.LabelHeightMm / 25.4, 4)
+    }
+
+    $params = [ordered]@{
+        printer = [ordered]@{
+            name = $Settings.PrinterName
+            file = $null
+            host = $null
+            port = $null
+        }
+        options = [ordered]@{
+            bounds          = $null
+            colorType       = 'grayscale'
+            copies          = 1
+            density         = $null
+            duplex          = $false
+            fallbackDensity = $null
+            interpolation   = 'bicubic'
+            jobName         = $null
+            legacy          = $false
+            margins         = 0
+            orientation     = $null
+            paperThickness  = $null
+            printerTray     = $null
+            rasterize       = $true
+            rotation        = 0
+            scaleContent    = $true
+            size            = [ordered]@{ width = $wIn; height = $hIn }
+            units           = 'in'
+            encoding        = $null
+            spool           = [ordered]@{ size = $null }
+        }
+        data = @([ordered]@{
+            type   = 'pixel'
+            format = 'image'
+            flavor = 'base64'
+            data   = $ImageBase64
+        })
+    }
+    Invoke-QzCall -Call 'print' -Params $params -Settings $Settings -Credentials $Credentials | Out-Null
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  FORM
-# ======================================================================
+# ══════════════════════════════════════════════════════════════════════════════
 $baseFont   = New-Object System.Drawing.Font('Segoe UI', 10.5)
 $titleFont  = New-Object System.Drawing.Font('Segoe UI Semibold', 16)
 $headerFont = New-Object System.Drawing.Font('Segoe UI Semibold', 10.5)
@@ -884,9 +1217,10 @@ $form = New-Object System.Windows.Forms.Form
 $form.Text          = if (Test-IsAdmin) { "System Information (Administrator)" } else { "System Information" }
 $form.Size          = New-Object System.Drawing.Size(960, 760)
 $form.StartPosition = 'CenterScreen'
-$form.MinimumSize   = New-Object System.Drawing.Size(740, 540)
+$form.MinimumSize   = New-Object System.Drawing.Size(740, 580)
 $form.Font          = $baseFont
 
+# ── Header ────────────────────────────────────────────────────────────────────
 $header = New-Object System.Windows.Forms.Panel
 $header.Dock      = 'Top'
 $header.Height    = 60
@@ -901,7 +1235,7 @@ $titleLabel.AutoSize  = $true
 $titleLabel.Location  = New-Object System.Drawing.Point(18, 14)
 $header.Controls.Add($titleLabel)
 
-# Buttons in a wrapping flow panel so they don't push off screen
+# ── Button bar ────────────────────────────────────────────────────────────────
 $buttons = New-Object System.Windows.Forms.FlowLayoutPanel
 $buttons.Dock          = 'Bottom'
 $buttons.Height        = 100
@@ -924,15 +1258,18 @@ $btnRefresh  = New-ActionButton "Refresh"
 $btnCopy     = New-ActionButton "Copy to Clipboard"
 $btnSave     = New-ActionButton "Save as Text..."
 $btnBattery  = New-ActionButton "Battery Report"
-$btnLabel    = New-ActionButton "Print Label (PDF)"
+$btnLabel    = New-ActionButton "Print Label"
 $btnQR       = New-ActionButton "Show QR Code"
 $btnSpeakers = New-ActionButton "Test Speakers"
 $btnCamera   = New-ActionButton "Test Camera"
 $btnKeyboard = New-ActionButton "Test Keyboard"
+$btnSettings = New-ActionButton "Settings"
 $btnClose    = New-ActionButton "Close"
 
-$buttons.Controls.AddRange(@($btnRefresh, $btnCopy, $btnSave, $btnBattery, $btnLabel, $btnQR, $btnSpeakers, $btnCamera, $btnKeyboard, $btnClose))
+$buttons.Controls.AddRange(@($btnRefresh, $btnCopy, $btnSave, $btnBattery, $btnLabel,
+    $btnQR, $btnSpeakers, $btnCamera, $btnKeyboard, $btnSettings, $btnClose))
 
+# ── Status strip ──────────────────────────────────────────────────────────────
 $status = New-Object System.Windows.Forms.StatusStrip
 $status.Font = $baseFont
 $statusLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
@@ -940,6 +1277,39 @@ $statusLabel.Text = "Ready"
 [void]$status.Items.Add($statusLabel)
 $form.Controls.Add($status)
 
+# ── Content panel: fills between header and button bar ────────────────────────
+# Contains the data grid (Fill) and notes panel (Bottom).
+$contentPanel = New-Object System.Windows.Forms.Panel
+$contentPanel.Dock = 'Fill'
+$form.Controls.Add($contentPanel)
+$contentPanel.BringToFront()
+
+# Notes panel — docked to the bottom of the content panel
+$notesPanel = New-Object System.Windows.Forms.Panel
+$notesPanel.Dock      = 'Bottom'
+$notesPanel.Height    = 82
+$notesPanel.BackColor = [System.Drawing.Color]::FromArgb(242, 244, 248)
+$contentPanel.Controls.Add($notesPanel)
+
+$notesHeaderLabel = New-Object System.Windows.Forms.Label
+$notesHeaderLabel.Text      = "Notes for label:"
+$notesHeaderLabel.Font      = $propFont
+$notesHeaderLabel.Dock      = 'Top'
+$notesHeaderLabel.Height    = 22
+$notesHeaderLabel.Padding   = New-Object System.Windows.Forms.Padding(8, 0, 0, 0)
+$notesHeaderLabel.TextAlign = 'MiddleLeft'
+$notesPanel.Controls.Add($notesHeaderLabel)
+
+$notesBox = New-Object System.Windows.Forms.TextBox
+$notesBox.Multiline  = $true
+$notesBox.ScrollBars = 'Vertical'
+$notesBox.Font       = $valFont
+$notesBox.Dock       = 'Fill'
+$notesBox.BackColor  = [System.Drawing.Color]::White
+$notesPanel.Controls.Add($notesBox)
+$notesBox.BringToFront()
+
+# ── Data grid — fills the space above the notes panel ─────────────────────────
 $grid = New-Object System.Windows.Forms.DataGridView
 $grid.Dock                      = 'Fill'
 $grid.ReadOnly                  = $true
@@ -969,30 +1339,25 @@ $grid.Columns[1].AutoSizeMode              = 'Fill'
 $grid.Columns[1].DefaultCellStyle.WrapMode = 'True'
 $grid.Columns[1].DefaultCellStyle.Font     = $valFont
 
-$form.Controls.Add($grid)
+$contentPanel.Controls.Add($grid)
 $grid.BringToFront()
 
-# ======================================================================
+# ══════════════════════════════════════════════════════════════════════════════
 #  ACTIONS
-# ======================================================================
+# ══════════════════════════════════════════════════════════════════════════════
 $script:currentReport = $null
 
 function Resize-FormToContent {
     if ($grid.Rows.Count -eq 0) { return }
     [System.Windows.Forms.Application]::DoEvents()
-
     $rowsHeight = 0
     foreach ($row in $grid.Rows) { $rowsHeight += $row.Height }
-    $gridNeeded = $rowsHeight + $grid.ColumnHeadersHeight + 4
-
-    $chrome = $form.Height - $form.ClientSize.Height
-    $targetClient = $header.Height + $buttons.Height + $status.Height + $gridNeeded
+    $gridNeeded   = $rowsHeight + $grid.ColumnHeadersHeight + 4
+    $chrome       = $form.Height - $form.ClientSize.Height
+    $targetClient = $header.Height + $buttons.Height + $status.Height + $notesPanel.Height + $gridNeeded
     $targetForm   = $targetClient + $chrome
-
-    $screen = [System.Windows.Forms.Screen]::FromControl($form).WorkingArea
-    $maxH = $screen.Height - 40
-    $newH = [Math]::Max($form.MinimumSize.Height, [Math]::Min($targetForm, $maxH))
-
+    $screen       = [System.Windows.Forms.Screen]::FromControl($form).WorkingArea
+    $newH         = [Math]::Max($form.MinimumSize.Height, [Math]::Min($targetForm, $screen.Height - 40))
     if ($newH -ne $form.Height) {
         $top = $form.Top
         if (($top + $newH) -gt ($screen.Top + $screen.Height)) {
@@ -1003,11 +1368,10 @@ function Resize-FormToContent {
 }
 
 function Populate-Grid {
-    $statusLabel.Text = "Gathering system information..."
-    $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+    $statusLabel.Text   = "Gathering system information..."
+    $form.Cursor        = [System.Windows.Forms.Cursors]::WaitCursor
     $btnRefresh.Enabled = $false
     [System.Windows.Forms.Application]::DoEvents()
-
     try {
         $report = Get-SystemReport
         $script:currentReport = $report
@@ -1015,10 +1379,8 @@ function Populate-Grid {
         foreach ($item in $report) {
             $rowIndex = $grid.Rows.Add($item.Property, $item.Value)
             if ($item.Highlight) {
-                $bg = [System.Drawing.Color]::FromArgb(232, 90, 90)
-                $fg = [System.Drawing.Color]::White
-                $grid.Rows[$rowIndex].DefaultCellStyle.BackColor          = $bg
-                $grid.Rows[$rowIndex].DefaultCellStyle.ForeColor          = $fg
+                $grid.Rows[$rowIndex].DefaultCellStyle.BackColor          = [System.Drawing.Color]::FromArgb(232, 90, 90)
+                $grid.Rows[$rowIndex].DefaultCellStyle.ForeColor          = [System.Drawing.Color]::White
                 $grid.Rows[$rowIndex].DefaultCellStyle.SelectionBackColor = [System.Drawing.Color]::FromArgb(200, 60, 60)
                 $grid.Rows[$rowIndex].DefaultCellStyle.SelectionForeColor = [System.Drawing.Color]::White
             }
@@ -1026,11 +1388,11 @@ function Populate-Grid {
         Resize-FormToContent
         $statusLabel.Text = "Ready. $($report.Count) items. Last refreshed $(Get-Date -Format 'HH:mm:ss')."
     } catch {
-        [System.Windows.Forms.MessageBox]::Show($form, "Error gathering information:`r`n$($_.Exception.Message)",
-            "Error", 'OK', 'Error') | Out-Null
+        [System.Windows.Forms.MessageBox]::Show($form,
+            "Error gathering information:`r`n$($_.Exception.Message)", "Error", 'OK', 'Error') | Out-Null
         $statusLabel.Text = "Error: $($_.Exception.Message)"
     } finally {
-        $form.Cursor = [System.Windows.Forms.Cursors]::Default
+        $form.Cursor        = [System.Windows.Forms.Cursors]::Default
         $btnRefresh.Enabled = $true
     }
 }
@@ -1084,237 +1446,92 @@ $btnBattery.Add_Click({
     }
 })
 
-# ======================================================================
-#  NETWORK SHARE HELPER  (scheduled task, runs non-elevated)
-# ======================================================================
-# WHY A SCHEDULED TASK:
-#   Our app runs elevated (admin token). Windows UAC splits the admin token
-#   from the regular-user token; the elevated token has a different network
-#   identity, so SMB shares that work in Explorer (regular user) fail from
-#   our elevated process regardless of cmdkey or net use.
-#   A scheduled task with RunLevel = Limited runs as the current user WITHOUT
-#   elevation -- exactly like Explorer -- so the NAS accepts it normally.
-
-$script:LabelShare = '\\momo\labels'
-
-function Copy-ToLabelShare {
-    <#
-      Spawns a non-elevated scheduled task to copy $LocalFile to
-      \\momo\labels\$FileName. The task writes "OK" or "ERR:..." to a
-      temp result file which we poll for. Returns "OK:<path>" or "ERR:<detail>".
-    #>
-    param([string]$LocalFile, [string]$FileName)
-
-    $dest        = Join-Path $script:LabelShare $FileName
-    $guid        = [Guid]::NewGuid().ToString('N')
-    $scriptFile  = Join-Path $env:TEMP "lbl_${guid}.ps1"
-    $resultFile  = Join-Path $env:TEMP "lbl_${guid}_result.txt"
-    $taskName    = "SysInfoLabel_${guid}"
-    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-
-    # Write the copy logic to a .ps1 file so we avoid any command-line
-    # quoting issues with paths that contain spaces or special characters.
-    $scriptContent = @"
-`$src = '$($LocalFile -replace "'", "''")'
-`$dst = '$($dest      -replace "'", "''")'
-`$res = '$($resultFile -replace "'", "''")'
-try {
-    Copy-Item -LiteralPath `$src -Destination `$dst -Force -ErrorAction Stop
-    'OK' | Set-Content -LiteralPath `$res -Encoding UTF8
-} catch {
-    ('ERR:' + `$_.Exception.Message) | Set-Content -LiteralPath `$res -Encoding UTF8
-}
-"@
-    $scriptContent | Set-Content -LiteralPath $scriptFile -Encoding UTF8
-
-    try {
-        $action    = New-ScheduledTaskAction -Execute 'powershell.exe' `
-                         -Argument "-NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptFile`""
-        $principal = New-ScheduledTaskPrincipal -UserId $currentUser -RunLevel Limited
-        $settings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 1) `
-                         -StartWhenAvailable
-        $trigger   = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(2)
-
-        Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal `
-            -Settings $settings -Trigger $trigger -Force -ErrorAction Stop | Out-Null
-        Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
-
-        # Poll for the result file while keeping the UI responsive (max 30 s)
-        $sw = [Diagnostics.Stopwatch]::StartNew()
-        while ($sw.ElapsedMilliseconds -lt 30000 -and -not (Test-Path $resultFile)) {
-            [System.Windows.Forms.Application]::DoEvents()
-            Start-Sleep -Milliseconds 400
-        }
-
-        if (Test-Path $resultFile) {
-            $r = (Get-Content $resultFile -Raw -Encoding UTF8).Trim()
-            if ($r -eq 'OK') { return "OK:$dest" }
-            return $r   # already starts with "ERR:"
-        }
-        return 'ERR:Timed out (30 s) - verify \\momo is online and reachable from this machine'
-
-    } catch {
-        return "ERR:$($_.Exception.Message)"
-    } finally {
-        try { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue } catch {}
-        try { Remove-Item $scriptFile, $resultFile -Force -ErrorAction SilentlyContinue } catch {}
-    }
-}
-
-# --- Print Label (Dymo 89mm x 36mm PDF) ---------------------------------
+# ── Print Label via QZ Tray ───────────────────────────────────────────────────
 $btnLabel.Add_Click({
-    $statusLabel.Text = "Generating label..."
-    $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+    $statusLabel.Text = "Printing label..."
+    $btnLabel.Enabled = $false
     [System.Windows.Forms.Application]::DoEvents()
     try {
-        $data = Get-LabelData
-        $serialPart = ''
-        try { $serialPart = (Get-CimInstance Win32_BIOS).SerialNumber -replace '[^A-Za-z0-9]', '' } catch {}
-        if (-not $serialPart) { $serialPart = $env:COMPUTERNAME }
-        $fileName  = "Label-{0}-{1}.pdf" -f $serialPart, (Get-Date -Format 'yyyyMMdd-HHmmss')
-        $desktop   = [Environment]::GetFolderPath('Desktop')
-        $localFile = Join-Path $desktop $fileName
-
-        # 1. Write PDF locally (always fast, always works)
-        New-DymoLabelPdf -Path $localFile `
-            -ModelLine   $data.Model `
-            -SpecsLine   $data.Specs `
-            -DisplayLine $data.Display `
-            -GpuLine     $data.Gpu `
-            -BatteryLine $data.Battery
-
-        # 2. Open it immediately so the user does not wait for the network
-        Start-Process $localFile
-
-        # 3. Copy to network share via non-elevated scheduled task
-        $statusLabel.Text = "Copying to $($script:LabelShare) (non-elevated task)..."
-        [System.Windows.Forms.Application]::DoEvents()
-        $result = Copy-ToLabelShare -LocalFile $localFile -FileName $fileName
-
-        if ($result -like 'OK:*') {
-            $statusLabel.Text = "Label saved: Desktop + $($result.Substring(3))"
-        } else {
-            $statusLabel.Text = "Label on Desktop only ($($result.Substring(4)))"
+        $settings = Get-AppSettings
+        if (-not $settings.PrinterName) {
+            throw "No printer configured. Open Settings to select a printer."
         }
-
+        $creds  = Get-QzCredentials
+        $data   = Get-LabelData
+        $imgB64 = New-LabelBitmap -LabelData $data -Notes $notesBox.Text -Settings $settings
+        Invoke-QzPrint -ImageBase64 $imgB64 -Settings $settings -Credentials $creds
+        $statusLabel.Text = "Label printed to '$($settings.PrinterName)'."
     } catch {
         [System.Windows.Forms.MessageBox]::Show($form,
-            "Could not generate label:`r`n$($_.Exception.Message)",
-            "Print Label", 'OK', 'Error') | Out-Null
-        $statusLabel.Text = "Label generation failed."
+            "Print failed:`r`n`r`n$($_.Exception.Message)", "Print Label", 'OK', 'Error') | Out-Null
+        $statusLabel.Text = "Print failed."
     } finally {
-        $form.Cursor = [System.Windows.Forms.Cursors]::Default
+        $btnLabel.Enabled = $true
     }
 })
-# --- Show QR Code -------------------------------------------------------
+
 $btnQR.Add_Click({
     $statusLabel.Text = "Generating QR code..."
     $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
     [System.Windows.Forms.Application]::DoEvents()
     try {
-        if (-not $script:currentReport) {
-            throw "No report data yet. Please wait for the report to load."
-        }
-
-        # Build a compact spec string for the QR payload. Keep it short
-        # so the QR code stays scannable — most Level-H QR codes max out
-        # around 1800 alphanumeric characters.
-        $qrLines = @()
-        $wantedKeys = @(
-            'Manufacturer', 'Model', 'Serial Number', 'CPU',
-            'Dedicated GPU', 'Integrated GPU', 'RAM', 'Operating System',
-            'Battery Health Percentage'
-        )
-        # Add storage rows (dynamic keys)
+        if (-not $script:currentReport) { throw "No report data yet. Please wait for the report to load." }
+        $qrLines     = @()
+        $wantedKeys  = @('Manufacturer','Model','Serial Number','CPU',
+                         'Dedicated GPU','Integrated GPU','RAM','Operating System','Battery Health Percentage')
         $storageKeys = $script:currentReport | Where-Object { $_.Property -like 'Storage*' } |
-            ForEach-Object { $_.Property }
-
+                           ForEach-Object { $_.Property }
         $allKeys = $wantedKeys + $storageKeys
         foreach ($item in $script:currentReport) {
             if ($allKeys -contains $item.Property) {
-                # Flatten multiline values (RAM Slots etc.) to single line
-                $val = ($item.Value -split "`r?`n")[0]
-                $qrLines += "$($item.Property): $val"
+                $qrLines += "$($item.Property): $(($item.Value -split "`r?`n")[0])"
             }
         }
-        $qrData = $qrLines -join "`n"
-
-        # URL-encode the payload
         Add-Type -AssemblyName System.Web
-        $encoded = [System.Web.HttpUtility]::UrlEncode($qrData)
-
-        # Fetch the QR image from qrserver.com (500x500 px, error correction H)
-        $url = "https://api.qrserver.com/v1/create-qr-code/?size=400x400&ecc=M&data=$encoded"
+        $encoded  = [System.Web.HttpUtility]::UrlEncode($qrLines -join "`n")
+        $url      = "https://api.qrserver.com/v1/create-qr-code/?size=400x400&ecc=M&data=$encoded"
         $statusLabel.Text = "Downloading QR code..."
         [System.Windows.Forms.Application]::DoEvents()
-
         $wc = New-Object System.Net.WebClient
         $wc.Headers.Add('User-Agent', 'SystemInfoTool/1.0')
         $imgBytes = $wc.DownloadData($url)
         $wc.Dispose()
-
         $ms  = New-Object System.IO.MemoryStream(,$imgBytes)
         $bmp = [System.Drawing.Bitmap]::FromStream($ms)
-
-        # Build a dialog to display the QR code
         $dlg = New-Object System.Windows.Forms.Form
-        $dlg.Text            = "QR Code - System Specs"
-        $dlg.Size            = New-Object System.Drawing.Size(460, 540)
-        $dlg.StartPosition   = 'CenterParent'
-        $dlg.FormBorderStyle = 'FixedDialog'
-        $dlg.MaximizeBox     = $false
-        $dlg.MinimizeBox     = $false
-        $dlg.BackColor       = [System.Drawing.Color]::White
-
+        $dlg.Text = "QR Code - System Specs"; $dlg.Size = New-Object System.Drawing.Size(460, 540)
+        $dlg.StartPosition = 'CenterParent'; $dlg.FormBorderStyle = 'FixedDialog'
+        $dlg.MaximizeBox = $false; $dlg.MinimizeBox = $false; $dlg.BackColor = [System.Drawing.Color]::White
         $pb = New-Object System.Windows.Forms.PictureBox
-        $pb.Image    = $bmp
-        $pb.SizeMode = 'Zoom'
-        $pb.Size     = New-Object System.Drawing.Size(420, 420)
-        $pb.Location = New-Object System.Drawing.Point(15, 10)
+        $pb.Image = $bmp; $pb.SizeMode = 'Zoom'
+        $pb.Size = New-Object System.Drawing.Size(420, 420); $pb.Location = New-Object System.Drawing.Point(15, 10)
         $dlg.Controls.Add($pb)
-
-        $lbl = New-Object System.Windows.Forms.Label
-        $lbl.Text      = "Scan to transfer specs to another app"
-        $lbl.Font      = New-Object System.Drawing.Font('Segoe UI', 9)
-        $lbl.ForeColor = [System.Drawing.Color]::Gray
-        $lbl.AutoSize  = $false
-        $lbl.Size      = New-Object System.Drawing.Size(420, 20)
-        $lbl.Location  = New-Object System.Drawing.Point(15, 438)
-        $lbl.TextAlign = 'MiddleCenter'
-        $dlg.Controls.Add($lbl)
-
+        $lbl2 = New-Object System.Windows.Forms.Label
+        $lbl2.Text = "Scan to transfer specs to another app"
+        $lbl2.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+        $lbl2.ForeColor = [System.Drawing.Color]::Gray; $lbl2.AutoSize = $false
+        $lbl2.Size = New-Object System.Drawing.Size(420, 20); $lbl2.Location = New-Object System.Drawing.Point(15, 438)
+        $lbl2.TextAlign = 'MiddleCenter'; $dlg.Controls.Add($lbl2)
         $btnOk = New-Object System.Windows.Forms.Button
-        $btnOk.Text     = "Close"
-        $btnOk.Size     = New-Object System.Drawing.Size(100, 32)
+        $btnOk.Text = "Close"; $btnOk.Size = New-Object System.Drawing.Size(100, 32)
         $btnOk.Location = New-Object System.Drawing.Point(175, 464)
-        $btnOk.Font     = New-Object System.Drawing.Font('Segoe UI', 10)
-        $btnOk.Add_Click({ $dlg.Close() })
-        $dlg.Controls.Add($btnOk)
-
+        $btnOk.Font = New-Object System.Drawing.Font('Segoe UI', 10)
+        $btnOk.Add_Click({ $dlg.Close() }); $dlg.Controls.Add($btnOk)
         $statusLabel.Text = "QR code ready."
         $dlg.ShowDialog($form) | Out-Null
-        $bmp.Dispose()
-        $ms.Dispose()
-        $dlg.Dispose()
-
+        $bmp.Dispose(); $ms.Dispose(); $dlg.Dispose()
     } catch {
         $msg = $_.Exception.Message
         if ($msg -match 'WebClient|WebException|network|Unable to connect') {
             [System.Windows.Forms.MessageBox]::Show($form,
-                "Could not reach api.qrserver.com. Check that this machine has internet access.",
-                "QR Code", 'OK', 'Warning') | Out-Null
+                "Could not reach api.qrserver.com. Check internet access.", "QR Code", 'OK', 'Warning') | Out-Null
         } else {
-            [System.Windows.Forms.MessageBox]::Show($form,
-                "QR code generation failed:`r`n$msg",
-                "QR Code", 'OK', 'Error') | Out-Null
+            [System.Windows.Forms.MessageBox]::Show($form, "QR code failed:`r`n$msg", "QR Code", 'OK', 'Error') | Out-Null
         }
         $statusLabel.Text = "QR code failed."
-    } finally {
-        $form.Cursor = [System.Windows.Forms.Cursors]::Default
-    }
+    } finally { $form.Cursor = [System.Windows.Forms.Cursors]::Default }
 })
 
-# --- Test Speakers ------------------------------------------------------
 $btnSpeakers.Add_Click({
     $btnSpeakers.Enabled = $false
     $leftWav  = Join-Path $env:TEMP ("spk-L-{0}.wav" -f ([Guid]::NewGuid().ToString('N')))
@@ -1322,23 +1539,14 @@ $btnSpeakers.Add_Click({
     try {
         New-PannedToneFile -Path $leftWav  -Channel Left  -Frequency 600 -DurationMs 900
         New-PannedToneFile -Path $rightWav -Channel Right -Frequency 800 -DurationMs 900
-
         $player = New-Object System.Media.SoundPlayer
-
         $statusLabel.Text = "Speaker test: playing LEFT speaker..."
         [System.Windows.Forms.Application]::DoEvents()
-        $player.SoundLocation = $leftWav
-        $player.Load()
-        $player.PlaySync()
-
+        $player.SoundLocation = $leftWav;  $player.Load(); $player.PlaySync()
         Start-Sleep -Milliseconds 350
-
         $statusLabel.Text = "Speaker test: playing RIGHT speaker..."
         [System.Windows.Forms.Application]::DoEvents()
-        $player.SoundLocation = $rightWav
-        $player.Load()
-        $player.PlaySync()
-
+        $player.SoundLocation = $rightWav; $player.Load(); $player.PlaySync()
         $statusLabel.Text = "Speaker test complete."
     } catch {
         [System.Windows.Forms.MessageBox]::Show($form, "Speaker test failed:`r`n$($_.Exception.Message)",
@@ -1350,7 +1558,6 @@ $btnSpeakers.Add_Click({
     }
 })
 
-# --- Test Camera --------------------------------------------------------
 $btnCamera.Add_Click({
     $statusLabel.Text = "Opening Camera app..."
     try {
@@ -1362,25 +1569,17 @@ $btnCamera.Add_Click({
             $statusLabel.Text = "Camera app launched."
         } catch {
             [System.Windows.Forms.MessageBox]::Show($form,
-                "Could not launch the Camera app. Make sure it is installed (Microsoft Store > Camera).`r`n`r`n$($_.Exception.Message)",
-                "Camera", 'OK', 'Warning') | Out-Null
+                "Could not launch the Camera app.`r`n`r`n$($_.Exception.Message)", "Camera", 'OK', 'Warning') | Out-Null
             $statusLabel.Text = "Camera app not available."
         }
     }
 })
 
-# --- Test Keyboard (kb.exe) --------------------------------------------
 $btnKeyboard.Add_Click({
-    $statusLabel.Text = "Launching keyboard tester (kb.exe)..."
     $kbExe = Join-Path $script:AppDir 'kb.exe'
     try {
-        if (Test-Path $kbExe) {
-            Start-Process $kbExe -ErrorAction Stop
-            $statusLabel.Text = "kb.exe launched."
-        } else {
-            Start-Process 'kb.exe' -ErrorAction Stop
-            $statusLabel.Text = "kb.exe launched (from PATH)."
-        }
+        if (Test-Path $kbExe) { Start-Process $kbExe -ErrorAction Stop; $statusLabel.Text = "kb.exe launched." }
+        else                  { Start-Process 'kb.exe' -ErrorAction Stop; $statusLabel.Text = "kb.exe launched (from PATH)." }
     } catch {
         [System.Windows.Forms.MessageBox]::Show($form,
             "Could not launch kb.exe.`r`n`r`nLooked in: $script:AppDir`r`nAlso tried PATH.`r`n`r`n$($_.Exception.Message)",
@@ -1389,9 +1588,209 @@ $btnKeyboard.Add_Click({
     }
 })
 
+$btnSettings.Add_Click({ Show-SettingsDialog -Owner $form })
+
 $btnClose.Add_Click({ $form.Close() })
 
-$form.Add_Shown({ Populate-Grid })
+# ══════════════════════════════════════════════════════════════════════════════
+#  SETTINGS DIALOG
+# ══════════════════════════════════════════════════════════════════════════════
+function Show-SettingsDialog {
+    param([System.Windows.Forms.Form]$Owner)
 
+    $s = Get-AppSettings
+
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text            = 'QZ Tray Settings'
+    $dlg.ClientSize      = New-Object System.Drawing.Size(420, 298)
+    $dlg.StartPosition   = 'CenterParent'
+    $dlg.FormBorderStyle = 'FixedDialog'
+    $dlg.MaximizeBox     = $false
+    $dlg.MinimizeBox     = $false
+    $dlg.Font            = $baseFont
+
+    # Helper: right-aligned row label
+    function _L([string]$text, [int]$y) {
+        $l = New-Object System.Windows.Forms.Label
+        $l.Text = $text; $l.TextAlign = 'MiddleRight'
+        $l.Location = New-Object System.Drawing.Point(12, $y)
+        $l.Size     = New-Object System.Drawing.Size(126, 22)
+        $dlg.Controls.Add($l)
+    }
+    $cx = 144   # control column x
+
+    # Row 0 — Host
+    _L 'QZ Tray Host:' 14
+    $txtHost = New-Object System.Windows.Forms.TextBox
+    $txtHost.Text = $s.QzHost
+    $txtHost.Location = New-Object System.Drawing.Point($cx, 12)
+    $txtHost.Size     = New-Object System.Drawing.Size(264, 24)
+    $dlg.Controls.Add($txtHost)
+
+    # Row 1 — Port + WSS
+    _L 'Port / Security:' 50
+    $numPort = New-Object System.Windows.Forms.NumericUpDown
+    $numPort.Location = New-Object System.Drawing.Point($cx, 48)
+    $numPort.Size     = New-Object System.Drawing.Size(72, 24)
+    $numPort.Minimum  = 1; $numPort.Maximum = 65535; $numPort.Value = $s.QzPort
+    $chkWss = New-Object System.Windows.Forms.CheckBox
+    $chkWss.Text     = 'Use WSS (TLS)'
+    $chkWss.Checked  = [bool]$s.UseSecureWs
+    $chkWss.Location = New-Object System.Drawing.Point(($cx + 78), 50)
+    $chkWss.AutoSize = $true
+    $dlg.Controls.AddRange(@($numPort, $chkWss))
+
+    # Row 2 — Printer
+    _L 'Printer:' 88
+    $cbPrinter = New-Object System.Windows.Forms.ComboBox
+    $cbPrinter.Text          = $s.PrinterName
+    $cbPrinter.DropDownStyle = 'DropDown'
+    $cbPrinter.Location      = New-Object System.Drawing.Point($cx, 86)
+    $cbPrinter.Size          = New-Object System.Drawing.Size(196, 24)
+    $btnList = New-Object System.Windows.Forms.Button
+    $btnList.Text     = 'List...'
+    $btnList.Location = New-Object System.Drawing.Point(($cx + 202), 86)
+    $btnList.Size     = New-Object System.Drawing.Size(62, 26)
+    $dlg.Controls.AddRange(@($cbPrinter, $btnList))
+
+    # Row 3 — Label dimensions
+    _L 'Label (W × H mm):' 126
+    $numW = New-Object System.Windows.Forms.NumericUpDown
+    $numW.Location = New-Object System.Drawing.Point($cx, 124)
+    $numW.Size     = New-Object System.Drawing.Size(62, 24)
+    $numW.Minimum  = 10; $numW.Maximum = 300; $numW.Value = $s.LabelWidthMm
+    $lblX = New-Object System.Windows.Forms.Label
+    $lblX.Text = '×'; $lblX.AutoSize = $true
+    $lblX.Location = New-Object System.Drawing.Point(($cx + 68), 128)
+    $numH = New-Object System.Windows.Forms.NumericUpDown
+    $numH.Location = New-Object System.Drawing.Point(($cx + 82), 124)
+    $numH.Size     = New-Object System.Drawing.Size(62, 24)
+    $numH.Minimum  = 10; $numH.Maximum = 300; $numH.Value = $s.LabelHeightMm
+    $dlg.Controls.AddRange(@($numW, $lblX, $numH))
+
+    # Row 3b — Rotation toggle
+    $chkRot = New-Object System.Windows.Forms.CheckBox
+    $chkRot.Text     = 'Rotate text 90° (text runs along long edge of label)'
+    $chkRot.Checked  = [bool]$s.RotateLabel90
+    $chkRot.AutoSize = $true
+    $chkRot.Location = New-Object System.Drawing.Point($cx, 158)
+    $dlg.Controls.Add($chkRot)
+
+    # Row 4 — Test Print
+    $btnTest = New-Object System.Windows.Forms.Button
+    $btnTest.Text     = 'Test Print'
+    $btnTest.Location = New-Object System.Drawing.Point($cx, 192)
+    $btnTest.Size     = New-Object System.Drawing.Size(100, 28)
+    $dlg.Controls.Add($btnTest)
+
+    # Separator line
+    $sep = New-Object System.Windows.Forms.Panel
+    $sep.BackColor = [System.Drawing.Color]::FromArgb(208, 210, 214)
+    $sep.Location  = New-Object System.Drawing.Point(12, 232)
+    $sep.Size      = New-Object System.Drawing.Size(396, 1)
+    $dlg.Controls.Add($sep)
+
+    # Save / Cancel
+    $btnDlgSave = New-Object System.Windows.Forms.Button
+    $btnDlgSave.Text         = 'Save'
+    $btnDlgSave.Location     = New-Object System.Drawing.Point(220, 243)
+    $btnDlgSave.Size         = New-Object System.Drawing.Size(84, 30)
+    $btnDlgSave.DialogResult = 'OK'
+    $btnDlgCancel = New-Object System.Windows.Forms.Button
+    $btnDlgCancel.Text         = 'Cancel'
+    $btnDlgCancel.Location     = New-Object System.Drawing.Point(316, 243)
+    $btnDlgCancel.Size         = New-Object System.Drawing.Size(84, 30)
+    $btnDlgCancel.DialogResult = 'Cancel'
+    $dlg.Controls.AddRange(@($btnDlgSave, $btnDlgCancel))
+    $dlg.AcceptButton = $btnDlgSave
+    $dlg.CancelButton = $btnDlgCancel
+
+    # ── Handlers ─────────────────────────────────────────────────────────────
+    $btnList.Add_Click({
+        $btnList.Enabled = $false
+        $dlg.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+        [System.Windows.Forms.Application]::DoEvents()
+        try {
+            $ts = [PSCustomObject]@{
+                QzHost = $txtHost.Text.Trim(); QzPort = [int]$numPort.Value
+                UseSecureWs = $chkWss.Checked; PrinterName = $cbPrinter.Text.Trim()
+                LabelWidthMm = [int]$numW.Value; LabelHeightMm = [int]$numH.Value
+                RotateLabel90 = $chkRot.Checked
+            }
+            $creds    = Get-QzCredentials
+            $printers = Get-QzPrinterList -Settings $ts -Credentials $creds
+            $cbPrinter.Items.Clear()
+            foreach ($p in $printers) { [void]$cbPrinter.Items.Add($p) }
+            if ($cbPrinter.Items.Count -gt 0 -and -not $cbPrinter.Text) { $cbPrinter.SelectedIndex = 0 }
+            if ($printers.Count -eq 0) {
+                [System.Windows.Forms.MessageBox]::Show($dlg,
+                    "QZ Tray responded but returned no printers.`nCheck that the Dymo driver is installed on the host.",
+                    "No Printers", 'OK', 'Warning') | Out-Null
+            }
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show($dlg,
+                "Could not list printers:`r`n`r`n$($_.Exception.Message)", "QZ Tray", 'OK', 'Error') | Out-Null
+        } finally {
+            $btnList.Enabled = $true
+            $dlg.Cursor = [System.Windows.Forms.Cursors]::Default
+        }
+    })
+
+    $btnTest.Add_Click({
+        $btnTest.Enabled = $false
+        $dlg.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+        [System.Windows.Forms.Application]::DoEvents()
+        try {
+            $ts = [PSCustomObject]@{
+                QzHost = $txtHost.Text.Trim(); QzPort = [int]$numPort.Value
+                UseSecureWs = $chkWss.Checked; PrinterName = $cbPrinter.Text.Trim()
+                LabelWidthMm = [int]$numW.Value; LabelHeightMm = [int]$numH.Value
+                RotateLabel90 = $chkRot.Checked
+            }
+            $testData = [PSCustomObject]@{
+                Model = 'Test Label'; Specs = 'CPU / 16 GB RAM / 512 GB SSD'
+                Display = $null; Gpu = $null; Battery = $null
+            }
+            $creds  = Get-QzCredentials
+            $imgB64 = New-LabelBitmap -LabelData $testData `
+                                     -Notes "Test print`n$(Get-Date -Format 'yyyy-MM-dd HH:mm')" `
+                                     -Settings $ts
+            Invoke-QzPrint -ImageBase64 $imgB64 -Settings $ts -Credentials $creds
+            [System.Windows.Forms.MessageBox]::Show($dlg,
+                "Test label sent to '$($ts.PrinterName)'.", "Test Print", 'OK', 'Information') | Out-Null
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show($dlg,
+                "Test print failed:`r`n`r`n$($_.Exception.Message)", "Test Print", 'OK', 'Error') | Out-Null
+        } finally {
+            $btnTest.Enabled = $true
+            $dlg.Cursor = [System.Windows.Forms.Cursors]::Default
+        }
+    })
+
+    # Show dialog, save on OK
+    if ($dlg.ShowDialog($Owner) -eq 'OK') {
+        $newSettings = [PSCustomObject]@{
+            QzHost        = $txtHost.Text.Trim()
+            QzPort        = [int]$numPort.Value
+            UseSecureWs   = $chkWss.Checked
+            PrinterName   = $cbPrinter.Text.Trim()
+            LabelWidthMm  = [int]$numW.Value
+            LabelHeightMm = [int]$numH.Value
+            RotateLabel90 = $chkRot.Checked
+        }
+        try {
+            Save-AppSettings $newSettings
+            $statusLabel.Text = "Settings saved."
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show($Owner,
+                "Settings could not be saved to disk:`r`n$($_.Exception.Message)",
+                "Settings", 'OK', 'Warning') | Out-Null
+        }
+    }
+    $dlg.Dispose()
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+$form.Add_Shown({ Populate-Grid })
 [void]$form.ShowDialog()
 $form.Dispose()
