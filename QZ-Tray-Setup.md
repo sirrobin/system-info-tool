@@ -123,7 +123,7 @@ The first time SystemInfo runs on a laptop, open the **Settings** dialog and con
 | Use WSS (TLS) | ✓ checked |
 | Printer | Type or paste the exact name as shown in QZ Tray, e.g. `DYMO LabelWriter 450 Turbo`. Use **List…** to query the host. |
 | Label (W × H mm) | `50 × 12` for DYMO 99017, or whatever your label is (long edge × short edge) |
-| Rotate text 90° | ✓ checked if you want text to read top-to-bottom when the label is held with the long edge vertical |
+| Rotate text 90° | ✓ checked for DYMO 99017 (and any label where the driver's natural orientation is portrait). Uncheck only if you've confirmed your printer driver expects landscape paper. |
 
 Click **Test Print** to confirm everything works. If it prints silently, you're done.
 
@@ -153,13 +153,39 @@ The signature data isn't matching what QZ Tray expects. The signing code (in `In
 - Sign the UTF-8 bytes of that hex string with **SHA512withRSA / PKCS1**
 - Base64-encode
 
-QZ Tray's verifier on the Java side (`PrintSocketClient.java` → `validSignature`) reverses any `\/` escapes before hashing, so any escape in the signing JSON produces a different SHA256 and fails verification. The `SIGN | signJson=... | sha256Hex=... | sigB64=...` line in the app's `qz-debug.log` can be used to verify externally.
+QZ Tray's verifier on the Java side (`PrintSocketClient.java` → `validSignature`) does this:
+```java
+JSONObject copy = new JSONObject(message, new String[] {"call", "params", "timestamp"});
+return certificate.isSignatureValid(algorithm, signature,
+    copy.toString().replaceAll("\\\\/", "/"));   // ← strips \/ before hashing
+```
+
+The `replaceAll("\\\\/", "/")` is the critical detail: QZ Tray reverses *any* `\/` escape in the data before hashing it. So if the client signs JSON containing `\/` (escaped slashes), the SHA256 won't match QZ Tray's, and verification fails. Base64 image data is full of `/` characters, so this affects every print call.
+
+In `Invoke-QzCall`, the line `$signJson = $signObj | ConvertTo-Json -Depth 20 -Compress` must **not** be followed by a `-replace '/', '\/'` step (it's fine to keep that replace on the *wire* JSON `$json`, but not on the signing JSON `$signJson`).
+
+The app's own `qz-debug.log` writes a `SIGN | signJson=... | sha256Hex=... | sigB64=...` line per print — that's the fastest way to spot the issue. If `signJson` contains any `\/` sequences, signing is broken.
 
 ### Label prints but text is rotated wrong / cut off
 
 Toggle the **Rotate text 90°** checkbox in Settings.
 
-The label-size fields are **always** entered as the printer's natural feed orientation (long edge × short edge, e.g. `50 × 12` for DYMO 99017). The rotation checkbox only affects how text is laid out within the label, not the label dimensions themselves.
+**Background.** The DYMO LabelWriter driver's "natural" page orientation for file-folder-style labels (like 99017) is usually **portrait** (12mm × 50mm), even though the label physically comes out long-edge-first from the printer. If you send the driver a landscape bitmap (50 × 12), it silently rotates the bitmap 90° to fit its portrait paper definition, so text that was running across the long edge ends up running across the short edge — with most of the content cut off.
+
+The **Rotate text 90°** checkbox handles this. With it **on**, the app:
+1. Draws text in landscape internally (full LabelWidthMm of room per line, so long spec strings fit)
+2. Rotates the finished bitmap 90° clockwise into portrait
+3. Sends the portrait bitmap to QZ Tray with width/height swapped to match
+
+The result: the printer driver receives a portrait bitmap that matches its expected orientation, prints it directly with no further rotation, and the text ends up running along the long edge of the physical label.
+
+If text comes out upside-down (correct edge but inverted), open `SystemInfo-GUI.ps1`, find the `RotateFlip` call in `New-LabelBitmap`, and change `Rotate90FlipNone` to `Rotate270FlipNone` (same direction, opposite handedness).
+
+The label-size fields in Settings are **always** entered as the printer's natural feed orientation (long edge × short edge, e.g. `50 × 12` for DYMO 99017), regardless of whether rotation is enabled. The rotation toggle handles the orientation translation internally.
+
+### How to verify what the printer actually received
+
+The app writes a copy of the final bitmap (after any rotation) to `<install dir>\label-preview.png` on every print. Open it after a print to see exactly what was sent to QZ Tray. This is the fastest way to tell whether a problem is on the bitmap-generation side (preview looks wrong) or the printer/driver side (preview looks right but the printed label doesn't match).
 
 ### `Connection closed: 1006 - Session Closed` in QZ Tray's log
 
@@ -199,4 +225,5 @@ On any laptop running SystemInfo-GUI:
 | --- | --- |
 | `<install dir>\SystemInfo-GUI.ps1` (or `.exe`) | The app itself, with cert/key embedded near the top |
 | `<install dir>\qz-debug.log` | App's own debug log — every send, receive, and signed payload |
+| `<install dir>\label-preview.png` | Copy of the final bitmap sent on the most recent print — overwritten each time. Open it to verify what reached the printer. |
 | `<install dir>\settings.json` | Per-laptop settings (printer name, host, etc.) |
