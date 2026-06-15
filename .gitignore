@@ -1,4 +1,3 @@
-@"
 # Compiled output
 *.exe
 *.dll
@@ -14,4 +13,13 @@ Thumbs.db
 # Logs and temp files
 *.log
 *.tmp
-"@ | Out-File -Encoding UTF8 .gitignore
+
+# Certificates / private keys / secrets — never commit
+*.pem
+*.pfx
+*.key
+*.p12
+*pfxb64.txt
+
+# Archives
+*.zip

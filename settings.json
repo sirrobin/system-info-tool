@@ -1,0 +1,9 @@
+﻿{
+    "QzHost":  "localhost",
+    "QzPort":  8181,
+    "UseSecureWs":  true,
+    "PrinterName":  "DYMO LabelWriter 450 Turbo",
+    "LabelWidthMm":  50,
+    "LabelHeightMm":  12,
+    "RotateLabel90":  true
+}
