@@ -14,7 +14,7 @@ QZ Tray refuses to print on behalf of a remote client unless every print request
 2. For each subsequent privileged call (`print`, `printers.find`, etc.), the client signs a JSON payload containing `{call, params, timestamp}` with its **private key** and includes the signature in the message.
 3. QZ Tray verifies the signature against the public certificate. If verification fails, the gateway dialog appears.
 
-The only way to make the dialog disappear is to use a cert/key pair that QZ Tray's local installation trusts as a root. The fastest way to get such a pair is to use QZ Tray's own **Create New** wizard, which generates the keys *and* registers the cert in every trust store QZ Tray uses internally. Manually placing the cert in `override.crt` only updates the Site Manager display — runtime signature verification uses a different code path that the wizard configures.
+To make the dialog disappear you need a cert/key pair that QZ Tray's local installation trusts. Two paths produce one (both covered in *Initial setup*, Step 3): generate a CA cert with `Generate-QzCert.ps1` and trust it on the host via `%APPDATA%\qz\certs\` + a one-time Allow, or use QZ Tray's own **Create New** wizard, which generates the keys *and* registers the cert in every trust store QZ Tray uses internally. Note that simply editing `override.crt` by hand only updates the Site Manager display — runtime signature verification uses a different code path, which is why the wizard (or the certs-folder + Allow flow) is needed.
 
 ---
 
@@ -32,9 +32,41 @@ You only need to do this once per QZ Tray host (the machine the DYMO printer is 
 
 Install the DYMO LabelWriter driver and confirm Windows can print a test page to the LabelWriter. QZ Tray talks to printers through the Windows print spooler, so the driver must be working before QZ Tray will find it.
 
-### Step 3 — Generate trusted keys via the wizard
+### Step 3 — Generate the signing credentials
 
-This is the critical step. Manually editing `override.crt` is **not** sufficient — the wizard does additional trust-store registration that no other method replicates.
+You need an RSA cert/key pair that QZ Tray trusts. There are two ways to produce one. **Option A** is the path the main script now expects (its header points at `Generate-QzCert.ps1`); **Option B** is the original QZ Tray wizard, kept here because it auto-registers trust on the host and because the troubleshooting notes below reference it.
+
+Whichever you pick, the cert/key end up pasted into the two here-strings in `SystemInfo-GUI.ps1` (see *Embedding the cert/key* below).
+
+#### Option A — `Generate-QzCert.ps1` (recommended)
+
+Run this once on any Windows machine (PowerShell 7 / `pwsh.exe` is required to export the PKCS#8 key):
+
+```powershell
+pwsh .\Generate-QzCert.ps1
+```
+
+It writes four files next to the script:
+
+| File | Use |
+| --- | --- |
+| `systeminfo-qz.pem` | Public certificate → paste into `$script:EmbeddedCertPem`, **and** copy to the QZ Tray host (see below) |
+| `systeminfo-qz.key.pem` | PKCS#8 private key → paste into `$script:EmbeddedKeyPem` |
+| `systeminfo-qz.pfx` | Private key + cert (password `QzLabel2024!`), if you need a PFX |
+| `systeminfo-qz.pfxb64.txt` | Base64 of the PFX |
+
+> These outputs are gitignored (`*.pem`, `*.pfx`, `*pfxb64.txt`) — they hold the private key and must never be committed.
+
+The cert is self-signed with `BasicConstraints CA:TRUE`, which is what lets QZ Tray grant print permission when you add it via Site Manager's **`+`** button. To trust it on the host:
+
+1. Copy `systeminfo-qz.pem` into `%APPDATA%\qz\certs\` on the QZ Tray host (create the folder if it doesn't exist), then restart QZ Tray.
+2. On the first print, QZ Tray may show a one-time **Allow / Block** popup — click **Allow** and tick **Remember this decision** to silence it for good. (Or pre-approve it in Site Manager before distributing the exe.)
+
+Then skip to *Embedding the cert/key*.
+
+#### Option B — QZ Tray's "Create New" wizard
+
+Use this if you'd rather have QZ Tray generate and auto-trust the keys on the host. Manually editing `override.crt` is **not** sufficient — the wizard does additional trust-store registration that no other method replicates.
 
 1. Right-click the QZ Tray icon in the system tray → **Advanced** → **Site Manager**
 2. In the Site Manager window, click the **`+`** button at the bottom.
@@ -50,14 +82,12 @@ This is the critical step. Manually editing `override.crt` is **not** sufficient
 
 **Keep this folder safe.** The private key is what authorises silent printing — anyone with it can print to your QZ Tray host without prompts.
 
-### Step 4 — Verify the wizard completed correctly
+### Step 4 — Verify the cert is trusted
 
-In Site Manager → Sites tab, you should now see an entry with:
-- Common Name: `QZ Tray Demo Cert`
-- Organisation: `QZ Industries, LLC`
-- Trusted: `Verified by QZ Industries, LLC` (green)
+In Site Manager → Sites tab, you should now see your cert listed:
 
-If Trusted shows anything else (`Third-party issued`, etc.), the wizard didn't complete. Run it again.
+- **Option A** (`Generate-QzCert.ps1`): Common Name `SystemInfoTool`, Organisation `Internal`. Make sure it's set to **Allow** (not Block / Prompt).
+- **Option B** (wizard): Common Name `QZ Tray Demo Cert`, Organisation `QZ Industries, LLC`, Trusted `Verified by QZ Industries, LLC` (green). If Trusted shows anything else (`Third-party issued`, etc.), the wizard didn't complete — run it again.
 
 ### Step 5 — Find the QZ Tray host's IP
 
@@ -93,11 +123,11 @@ $script:EmbeddedKeyPem = @'
 
 ### Step 3 — Replace the cert
 
-Open `digital-certificate.txt` from the wizard folder. Replace the contents of `$script:EmbeddedCertPem` between the `@'` and `'@` markers with the new file's contents. Preserve the `-----BEGIN CERTIFICATE-----` / `-----END CERTIFICATE-----` markers exactly.
+Open the cert file — `systeminfo-qz.pem` (Option A) or `digital-certificate.txt` from the wizard folder (Option B). Replace the contents of `$script:EmbeddedCertPem` between the `@'` and `'@` markers with the file's contents. Preserve the `-----BEGIN CERTIFICATE-----` / `-----END CERTIFICATE-----` markers exactly.
 
 ### Step 4 — Replace the private key
 
-Open `private-key.pem` from the wizard folder. Replace the contents of `$script:EmbeddedKeyPem` the same way. The key must be in PKCS#8 format (header is `BEGIN PRIVATE KEY`, not `BEGIN RSA PRIVATE KEY`). The wizard always produces PKCS#8 so this is automatic.
+Open the key file — `systeminfo-qz.key.pem` (Option A) or `private-key.pem` from the wizard folder (Option B). Replace the contents of `$script:EmbeddedKeyPem` the same way. The key must be in PKCS#8 format (header is `BEGIN PRIVATE KEY`, not `BEGIN RSA PRIVATE KEY`). Both `Generate-QzCert.ps1` and the wizard always produce PKCS#8, so this is automatic.
 
 ### Step 5 — Recompile to .exe (optional)
 
@@ -203,7 +233,7 @@ Usually means `Get-LabelData` is failing to populate. Run the script from a Powe
 
 ## Cert renewal
 
-The wizard cert is valid for **20 years**. There's no scheduled renewal needed. If the cert is ever revoked, lost, or compromised, re-run the wizard on the QZ Tray host (Step 3) and re-embed (Steps 1–5 of *Embedding the cert/key*).
+A `Generate-QzCert.ps1` cert is valid for **10 years**; the QZ Tray wizard cert is valid for **20 years**. There's no scheduled renewal needed. If the cert is ever revoked, lost, or compromised, regenerate it (Step 3 — re-run `Generate-QzCert.ps1` or the wizard) and re-embed (Steps 1–5 of *Embedding the cert/key*).
 
 ---
 
@@ -216,8 +246,9 @@ On the QZ Tray host:
 | `%APPDATA%\qz\allowed.dat` | Trusted cert fingerprints (added by Allow + Remember, or by the wizard) |
 | `%APPDATA%\qz\debug.log` | QZ Tray's runtime log — primary source of truth when debugging |
 | `%APPDATA%\qz\prefs.properties` | User-level settings (e.g. `tray.notifications`) |
-| `C:\Program Files\QZ Tray\override.crt` | Root-CA override; copied by the wizard |
-| `~\Desktop\QZ Tray Demo Cert\` | Wizard output: `digital-certificate.txt` and `private-key.pem` |
+| `%APPDATA%\qz\certs\` | Drop `systeminfo-qz.pem` here (Option A) so QZ Tray trusts the cert; restart QZ Tray after |
+| `C:\Program Files\QZ Tray\override.crt` | Root-CA override; copied by the wizard (Option B) |
+| `~\Desktop\QZ Tray Demo Cert\` | Wizard output (Option B): `digital-certificate.txt` and `private-key.pem` |
 
 On any laptop running SystemInfo-GUI:
 
@@ -227,3 +258,11 @@ On any laptop running SystemInfo-GUI:
 | `<install dir>\qz-debug.log` | App's own debug log — every send, receive, and signed payload |
 | `<install dir>\label-preview.png` | Copy of the final bitmap sent on the most recent print — overwritten each time. Open it to verify what reached the printer. |
 | `<install dir>\settings.json` | Per-laptop settings (printer name, host, etc.) |
+
+In this repo (build-time helpers, not shipped to laptops):
+
+| Path | Purpose |
+| --- | --- |
+| `Generate-QzCert.ps1` | **Option A** generator — creates a fresh self-signed cert/key pair (`systeminfo-qz.*`) to paste into the embedded constants. Run once with `pwsh.exe`. |
+| `Create-QzPfxFromPem.ps1` | Reuses the existing **InventoryApp** cert/key (already trusted in QZ Tray) so SystemInfo prints under the same identity with no host changes. Note: it targets PFX-based constants (`$script:EmbeddedPfxBase64` / `$script:PfxPassword`); the current script uses the PEM constants above, so use the InventoryApp `.pem`/`.key.pem` directly unless you switch the script back to PFX loading. |
+| `diag-cim.ps1` | Standalone CIM/WMI diagnostic helper. |
