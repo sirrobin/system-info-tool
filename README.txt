@@ -8,7 +8,7 @@ Includes built-in tests for speakers, camera, and keyboard (via ``kb.exe``).
 
 ## Transferring specs (QR)
 
-**Show QR Code** encodes the key specs and renders a QR **entirely offline** (via an embedded QRCoder library — no internet, and the specs never leave the machine). The payload is compact JSON:
+A spec QR is shown on the main window at all times (refreshed with each report). It encodes the key specs and is rendered **entirely offline** (via an embedded QRCoder library — no internet, and the specs never leave the machine). The payload is compact JSON:
 
 ``````json
 {"t":"sysinfo","v":1,"fields":{"manufacturer":"...","model":"...","serial":"...","cpu":"...","gpuDedicated":"...","gpuIntegrated":"...","ram":"...","os":"...","battery":"...","storage":["..."]}}
