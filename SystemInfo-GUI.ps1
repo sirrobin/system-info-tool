@@ -1078,9 +1078,12 @@ $qrPanel.Controls.Add($qrHeader)
 
 $qrPicture = New-Object System.Windows.Forms.PictureBox
 $qrPicture.Dock     = 'Fill'
-$qrPicture.SizeMode = 'Zoom'
+$qrPicture.SizeMode = 'CenterImage'
+$qrPicture.Cursor   = [System.Windows.Forms.Cursors]::Hand
 $qrPanel.Controls.Add($qrPicture)
 $qrPicture.BringToFront()
+# Tap the thumbnail to pop a large, crisp QR that scans easily from a phone.
+$qrPicture.Add_Click({ Show-QRDialog })
 
 $qrCaption = New-Object System.Windows.Forms.Label
 $qrCaption.Text      = "Scan to transfer specs"
@@ -1128,6 +1131,7 @@ $grid.BringToFront()
 #  ACTIONS
 # ==============================================================================
 $script:currentReport = $null
+$script:lastSpecJson  = $null
 
 function Resize-FormToContent {
     if ($grid.Rows.Count -eq 0) { return }
@@ -1152,11 +1156,37 @@ function Resize-FormToContent {
     }
 }
 
+function New-CrispQRBitmap {
+    # Build a crisp QR for $json sized to about $targetPx: render a 1px-per-module
+    # source, then scale it up by an INTEGER factor with nearest-neighbour so the
+    # module edges stay razor-sharp. Bilinear/Zoom scaling blurs the modules and a
+    # phone camera can't read them off a screen — which is exactly why a QR that
+    # decodes fine as a saved image may refuse to scan live. Returns $null if
+    # there's nothing to encode.
+    param([string]$json, [int]$targetPx)
+    if (-not $json) { return $null }
+    [void](Get-QRCoderAssembly)
+    $qrData = (New-Object QRCoder.QRCodeGenerator).CreateQrCode($json, [QRCoder.QRCodeGenerator+ECCLevel]::M)
+    $src    = (New-Object QRCoder.QRCode $qrData).GetGraphic(1)
+    $mods   = $src.Width
+    $scale  = [Math]::Max(2, [Math]::Floor($targetPx / $mods))
+    $px     = $mods * $scale
+    $bmp    = New-Object System.Drawing.Bitmap $px, $px
+    $g      = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+    $g.PixelOffsetMode   = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+    $g.DrawImage($src, 0, 0, $px, $px)
+    $g.Dispose(); $src.Dispose()
+    return $bmp
+}
+
 function Update-QRCode {
-    # Regenerate the always-visible spec QR from the current report. Rendered
-    # entirely offline via the embedded QRCoder library; specs never leave the box.
+    # Regenerate the always-visible spec QR thumbnail from the current report.
+    # Rendered entirely offline via the embedded QRCoder library; specs never
+    # leave the box. Tapping it opens a large version for easy scanning.
     try {
         $old = $qrPicture.Image
+        $script:lastSpecJson = $null
         if (-not $script:currentReport) { $qrPicture.Image = $null; if ($old) { $old.Dispose() }; return }
         $json = Get-SpecsJson $script:currentReport
         if (-not $json) {
@@ -1164,16 +1194,49 @@ function Update-QRCode {
             $qrCaption.Text = "No spec fields to encode"
             return
         }
-        [void](Get-QRCoderAssembly)
-        $qrGen  = New-Object QRCoder.QRCodeGenerator
-        $qrData = $qrGen.CreateQrCode($json, [QRCoder.QRCodeGenerator+ECCLevel]::M)
-        $qrCode = New-Object QRCoder.QRCode $qrData
-        $qrPicture.Image = $qrCode.GetGraphic(10)
-        $qrCaption.Text  = "Scan to transfer specs"
+        $script:lastSpecJson = $json
+        $avail = [Math]::Min($qrPicture.ClientSize.Width, $qrPicture.ClientSize.Height)
+        if ($avail -lt 80) { $avail = 200 }   # not laid out yet — assume the panel size
+        $qrPicture.Image = New-CrispQRBitmap $json $avail
+        $qrCaption.Text  = "Tap the QR to enlarge for scanning"
         if ($old) { $old.Dispose() }
     } catch {
         $qrCaption.Text = "QR unavailable"
     }
+}
+
+function Show-QRDialog {
+    # Pop a large, crisp QR (~8px per module) so a phone scans it effortlessly.
+    if (-not $script:lastSpecJson) { return }
+    $big = New-CrispQRBitmap $script:lastSpecJson 560
+    if (-not $big) { return }
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text            = "Scan specs"
+    $dlg.StartPosition   = 'CenterParent'
+    $dlg.FormBorderStyle = 'FixedDialog'
+    $dlg.MaximizeBox     = $false
+    $dlg.MinimizeBox     = $false
+    $dlg.BackColor       = [System.Drawing.Color]::White
+    $dlg.KeyPreview      = $true
+    $dlg.ClientSize      = New-Object System.Drawing.Size (($big.Width + 40), ($big.Height + 64))
+    $pb = New-Object System.Windows.Forms.PictureBox
+    $pb.Image    = $big
+    $pb.SizeMode = 'AutoSize'
+    $pb.Location = New-Object System.Drawing.Point 20, 20
+    $dlg.Controls.Add($pb)
+    $cap = New-Object System.Windows.Forms.Label
+    $cap.Text      = "Scan with your phone - click anywhere to close"
+    $cap.Font      = New-Object System.Drawing.Font('Segoe UI', 9)
+    $cap.ForeColor = [System.Drawing.Color]::Gray
+    $cap.AutoSize  = $false
+    $cap.TextAlign = 'MiddleCenter'
+    $cap.SetBounds(20, ($big.Height + 26), $big.Width, 24)
+    $dlg.Controls.Add($cap)
+    $close = [System.EventHandler]{ $dlg.Close() }
+    $dlg.Add_Click($close); $pb.Add_Click($close); $cap.Add_Click($close)
+    $dlg.Add_KeyDown({ if ($_.KeyCode -eq 'Escape') { $dlg.Close() } })
+    $dlg.ShowDialog($form) | Out-Null
+    $big.Dispose(); $dlg.Dispose()
 }
 
 function Populate-Grid {
