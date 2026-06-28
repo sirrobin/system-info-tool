@@ -195,6 +195,10 @@ function Get-SpecsJson {
         'RAM'              = 'ram'
         'Operating System' = 'os'
         'Battery Health'   = 'battery'
+        'Screen size'           = 'screenSize'
+        'Screen max resolution' = 'resolution'
+        'Touchscreen'           = 'touch'
+        'WWAN'                  = 'wwan'
     }
     $fields = [ordered]@{}
     foreach ($row in $Report) {
