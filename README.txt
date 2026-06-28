@@ -26,18 +26,14 @@ Another app can scan it to import the specs (e.g. the eBay AI auto-lister attach
 
 ``````powershell
 Install-Module ps2exe -Scope CurrentUser
-.\Build-Exe.ps1
+Invoke-ps2exe .\SystemInfo-GUI.ps1 .\SystemInfo.exe -noConsole
 ``````
-
-Build-Exe.ps1 compiles the script and injects the self-update token from the
-gitignored ``update-token.txt`` (a fine-grained, read-only, single-repo GitHub
-PAT) so it lands in the exe but never in source control. Without that file it
-still builds, but the Check for Updates button won't reach the private repo.
 
 ## Self-update
 
-The app checks GitHub Releases for a newer tag than its own version and, if
-found, downloads the release's SystemInfo.exe and swaps itself. Ship a new
-version by bumping ``$script:AppVersion``, building, and publishing a Release
-whose tag (e.g. ``v1.6.0``) is higher, with the new exe attached as an asset.
+The app checks this repo's GitHub Releases for a newer tag than its own version
+and, if found, downloads the release's SystemInfo.exe and swaps itself (the repo
+is public, so no token is needed). Ship a new version by bumping
+``$script:AppVersion``, building, and publishing a Release whose tag (e.g.
+``v1.6.0``) is higher, with the new exe attached as an asset.
 "@ | Out-File -Encoding UTF8 README.md
