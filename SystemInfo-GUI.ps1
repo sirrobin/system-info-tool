@@ -78,9 +78,9 @@ else {
 if (-not $script:AppDir) { $script:AppDir = (Get-Location).Path }
 
 # -- Application version + GitHub update source --------------------------------
-$script:AppVersion  = '1.0.0'
-$script:GitHubOwner = ''   # e.g. 'myusername'
-$script:GitHubRepo  = ''   # e.g. 'SystemInfo-GUI'
+$script:AppVersion  = '1.5.0'
+$script:GitHubOwner = 'sirrobin'
+$script:GitHubRepo  = 'system-info-tool'
 
 # ==============================================================================
 #  EMBEDDED IsMyLcdOK_x64.exe  (NirSoft -- display/LCD tester. Extracted to
