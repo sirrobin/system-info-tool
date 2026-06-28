@@ -81,6 +81,11 @@ if (-not $script:AppDir) { $script:AppDir = (Get-Location).Path }
 $script:AppVersion  = '1.5.0'
 $script:GitHubOwner = 'sirrobin'
 $script:GitHubRepo  = 'system-info-tool'
+# Read-only, single-repo fine-grained PAT for self-update against the PRIVATE
+# repo. Left empty in source (never committed); Build-Exe.ps1 injects the real
+# value from the gitignored update-token.txt at build time. Anyone who extracts
+# the distributed exe can read this token, so scope it to this repo only.
+$script:UpdateToken = ''
 
 # ==============================================================================
 #  EMBEDDED IsMyLcdOK_x64.exe  (NirSoft -- display/LCD tester. Extracted to
@@ -888,9 +893,24 @@ function Invoke-AppUpdate {
         $statusLabel.Text = "Checking for updates..."
         [System.Windows.Forms.Application]::DoEvents()
 
+        # GitHub requires TLS 1.2+; Windows PowerShell (the ps2exe runtime) may
+        # still default to TLS 1.0, which fails the handshake.
+        try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+
+        # The repo is private, so the releases API needs an auth token. Without
+        # one the API returns 404 to anonymous callers.
         $apiUrl  = "https://api.github.com/repos/$script:GitHubOwner/$script:GitHubRepo/releases/latest"
-        $headers = @{ 'User-Agent' = 'SystemInfo-GUI/1.0'; 'Accept' = 'application/vnd.github.v3+json' }
-        $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers -ErrorAction Stop
+        $headers = @{ 'User-Agent' = 'SystemInfo-GUI/1.0'; 'Accept' = 'application/vnd.github+json' }
+        if ($script:UpdateToken) { $headers['Authorization'] = "Bearer $script:UpdateToken" }
+        try {
+            $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers -ErrorAction Stop
+        } catch {
+            $code = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
+            if ($code -eq 404 -and -not $script:UpdateToken) {
+                throw "No published release found, or this build has no update token for the private repo."
+            }
+            throw "Could not reach the update server (HTTP $code): $($_.Exception.Message)"
+        }
         $latestTag = $release.tag_name -replace '^v', ''
 
         try {
@@ -933,11 +953,33 @@ function Invoke-AppUpdate {
         $tempPath   = $currentExe + '.new'
         $oldPath    = $currentExe + '.old'
 
+        # Private-repo assets can't be fetched via browser_download_url anonymously.
+        # Hit the asset API URL with Accept: octet-stream + the token; GitHub then
+        # 302-redirects to a signed storage URL that must be fetched WITHOUT the
+        # Authorization header (the storage backend rejects a second auth scheme).
+        # Raw HttpWebRequest with AllowAutoRedirect=$false behaves identically on
+        # Windows PowerShell 5.1 (the ps2exe runtime) and PowerShell 7, unlike
+        # Invoke-WebRequest's redirect/exception handling.
         try {
-            $wc = New-Object System.Net.WebClient
-            $wc.Headers.Add('User-Agent', 'SystemInfo-GUI/1.0')
-            $wc.DownloadFile($asset.browser_download_url, $tempPath)
-            $wc.Dispose()
+            $req = [System.Net.HttpWebRequest]::Create($asset.url)
+            $req.UserAgent       = 'SystemInfo-GUI/1.0'
+            $req.Accept          = 'application/octet-stream'
+            $req.AllowAutoRedirect = $false
+            if ($script:UpdateToken) { $req.Headers['Authorization'] = "Bearer $script:UpdateToken" }
+            $resp = $req.GetResponse()
+            $code = [int]$resp.StatusCode
+            if ($code -ge 300 -and $code -lt 400) {
+                # Redirect to signed storage: download it with a clean client.
+                $redir = $resp.Headers['Location']; $resp.Close()
+                if (-not $redir) { throw "Redirect had no Location header." }
+                $wc = New-Object System.Net.WebClient
+                $wc.Headers.Add('User-Agent', 'SystemInfo-GUI/1.0')
+                try { $wc.DownloadFile($redir, $tempPath) } finally { $wc.Dispose() }
+            } else {
+                # Direct 200: the response body IS the asset.
+                $fs = [System.IO.File]::Create($tempPath)
+                try { $resp.GetResponseStream().CopyTo($fs) } finally { $fs.Close(); $resp.Close() }
+            }
         } catch {
             Remove-Item $tempPath -ErrorAction SilentlyContinue
             throw "Download failed: $($_.Exception.Message)"

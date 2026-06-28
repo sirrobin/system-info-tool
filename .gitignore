@@ -21,6 +21,7 @@ Thumbs.db
 *.key
 *.p12
 *pfxb64.txt
+update-token.txt
 
 # Archives
 *.zip
