@@ -25,6 +25,24 @@ function V($x) { if ($null -eq $x) { '' } else { ([string]$x).Trim() } }
 
 $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
 
+# Not admin? Relaunch elevated so battery health + SSD wear read. The script is
+# piped from the network (not a file), so we re-fetch it in an elevated window.
+# If the user declines UAC we just continue without those two fields.
+if (-not $elevated -and $CallbackUrl -like 'http*') {
+  $base = $CallbackUrl -replace '/api/specs/scan$', ''
+  $selfUrl = if ($Sku) { "$base/s/$Sku" } else { "$base/s" }
+  Write-Host ''
+  Write-Host '  Requesting administrator rights (for battery health + SSD wear)...' -ForegroundColor Yellow
+  try {
+    Start-Process -FilePath 'powershell.exe' -Verb RunAs -ErrorAction Stop `
+      -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-Command', "irm $selfUrl | iex"
+    Write-Host '  Continuing in the elevated window that just opened.' -ForegroundColor DarkGray
+    return   # hand off to the elevated instance
+  } catch {
+    Write-Host '  (elevation declined - continuing without battery health / SSD wear)' -ForegroundColor DarkYellow
+  }
+}
+
 Write-Host ''
 Write-Host '  Collecting specs...' -ForegroundColor Cyan
 
