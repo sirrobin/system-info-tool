@@ -23,6 +23,8 @@ $Sku         = '__SKU__'        # injected by the lister; empty for the bare /s 
 
 function V($x) { if ($null -eq $x) { '' } else { ([string]$x).Trim() } }
 
+$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
+
 Write-Host ''
 Write-Host '  Collecting specs...' -ForegroundColor Cyan
 
@@ -87,8 +89,14 @@ if ($phys.Count) {
 }
 if ($storage.Count) { $fields.storage = @($storage) }
 
-# --- Screen size (EDID physical dimensions -> diagonal inches) ---
-$edid = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction SilentlyContinue | Select-Object -First 1
+# --- Screen size: prefer the INTERNAL laptop panel over any docked external ---
+$allEdid = @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction SilentlyContinue)
+$conn    = @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorConnectionParams -ErrorAction SilentlyContinue)
+# D3DKMDT_VOT_INTERNAL = 0x80000000 marks the built-in panel (eDP/LVDS).
+$internal = $conn | Where-Object { $_.VideoOutputTechnology -eq 2147483648 -or $_.VideoOutputTechnology -eq -2147483648 } | Select-Object -First 1
+$edid = $null
+if ($internal) { $edid = $allEdid | Where-Object { $_.InstanceName -eq $internal.InstanceName } | Select-Object -First 1 }
+if (-not $edid) { $edid = $allEdid | Select-Object -First 1 }  # desktop / no internal flag
 if ($edid -and $edid.MaxHorizontalImageSize) {
   $diag = [math]::Sqrt([math]::Pow($edid.MaxHorizontalImageSize, 2) + [math]::Pow($edid.MaxVerticalImageSize, 2)) / 2.54
   if ($diag -ge 5) { $fields.screenSize = ('{0:0.0}"' -f $diag) }
@@ -103,12 +111,40 @@ if (Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match 'touch ?scre
 # --- WWAN / mobile broadband ---
 if (Get-CimInstance Win32_NetworkAdapter | Where-Object { $_.Name -match 'Mobile Broadband|WWAN|LTE|5G Modem|Cellular' }) { $fields.wwan = 'Yes' }
 
-# --- Battery health (design vs full-charge capacity) ---
-$full   = (Get-CimInstance -Namespace root\wmi -ClassName BatteryFullChargedCapacity -ErrorAction SilentlyContinue).FullChargedCapacity
-$design = (Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData -ErrorAction SilentlyContinue).DesignedCapacity
-if ($full -and $design) { $fields.battery = ('{0}% ({1} / {2} mWh)' -f [math]::Round(100 * $full / $design), $full, $design) }
+# --- Battery health (design vs full-charge capacity; root\wmi needs admin) ---
+$hasBattery = [bool](Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue)
+$full   = (Get-CimInstance -Namespace root\wmi -ClassName BatteryFullChargedCapacity -ErrorAction SilentlyContinue | Measure-Object -Property FullChargedCapacity -Sum).Sum
+$design = (Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData -ErrorAction SilentlyContinue | Measure-Object -Property DesignedCapacity -Sum).Sum
+if ($full -and $design) {
+  $fields.battery = ('{0}% (full {1} / design {2} mWh)' -f [math]::Round(100 * $full / $design), $full, $design)
+} elseif ($hasBattery) {
+  $fields.battery = 'present - run elevated for health %'
+}
 
 if ($fields.Count -eq 0) { Write-Host '  No specs collected.' -ForegroundColor Red; return }
+
+# Show what we found so it's visible on the machine itself, not just in the lister.
+$labels = [ordered]@{
+  manufacturer = 'Manufacturer'; model = 'Model'; serial = 'Serial'; cpu = 'CPU'
+  gpuDedicated = 'GPU (dedicated)'; gpuIntegrated = 'GPU (integrated)'; ram = 'RAM'
+  os = 'OS'; screenSize = 'Screen'; resolution = 'Resolution'; touch = 'Touch'; wwan = 'WWAN'; battery = 'Battery'
+}
+Write-Host ''
+Write-Host '  --- Collected specs ---' -ForegroundColor Cyan
+foreach ($k in $fields.Keys) {
+  if ($k -eq 'storage') {
+    Write-Host ('  {0,-16}:' -f 'Storage') -ForegroundColor Gray
+    foreach ($s in $fields.storage) { Write-Host "      - $s" }
+  } else {
+    $lbl = if ($labels.Contains($k)) { $labels[$k] } else { $k }
+    Write-Host ('  {0,-16}: ' -f $lbl) -ForegroundColor Gray -NoNewline
+    Write-Host $fields[$k]
+  }
+}
+if (-not $elevated) {
+  Write-Host '  (tip: run PowerShell as Administrator to read battery health + SSD wear)' -ForegroundColor DarkYellow
+}
+Write-Host ''
 
 $json = ([ordered]@{ t = 'sysinfo'; v = 1; fields = $fields } | ConvertTo-Json -Depth 5 -Compress)
 
