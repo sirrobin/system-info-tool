@@ -129,14 +129,32 @@ if (Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match 'touch ?scre
 # --- WWAN / mobile broadband ---
 if (Get-CimInstance Win32_NetworkAdapter | Where-Object { $_.Name -match 'Mobile Broadband|WWAN|LTE|5G Modem|Cellular' }) { $fields.wwan = 'Yes' }
 
-# --- Battery health (design vs full-charge capacity; root\wmi needs admin) ---
+# --- Battery health (design vs full-charge capacity) ---
 $hasBattery = [bool](Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue)
 $full   = (Get-CimInstance -Namespace root\wmi -ClassName BatteryFullChargedCapacity -ErrorAction SilentlyContinue | Measure-Object -Property FullChargedCapacity -Sum).Sum
 $design = (Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData -ErrorAction SilentlyContinue | Measure-Object -Property DesignedCapacity -Sum).Sum
+if (-not ($full -and $design) -and $hasBattery) {
+  # The root\wmi ACPI classes are missing on many laptops (even elevated). Fall
+  # back to powercfg's battery report — reliable, and it doesn't need admin.
+  try {
+    $rpt = Join-Path $env:TEMP ("bat_" + [guid]::NewGuid().ToString('N') + ".xml")
+    powercfg /batteryreport /output "$rpt" /xml *> $null
+    if (Test-Path $rpt) {
+      $txt = Get-Content $rpt -Raw
+      Remove-Item $rpt -Force -ErrorAction SilentlyContinue
+      $dm = [regex]::Match($txt, 'Design(?:ed)?Capacity[^<>]*>\s*([\d,]+)')
+      $fm = [regex]::Match($txt, 'FullCharge(?:d)?Capacity[^<>]*>\s*([\d,]+)')
+      if ($dm.Success -and $fm.Success) {
+        $design = [int64]($dm.Groups[1].Value -replace ',', '')
+        $full = [int64]($fm.Groups[1].Value -replace ',', '')
+      }
+    }
+  } catch { }
+}
 if ($full -and $design) {
   $fields.battery = ('{0}% (full {1} / design {2} mWh)' -f [math]::Round(100 * $full / $design), $full, $design)
 } elseif ($hasBattery) {
-  $fields.battery = 'present - run elevated for health %'
+  $fields.battery = 'present (health unavailable)'
 }
 
 if ($fields.Count -eq 0) { Write-Host '  No specs collected.' -ForegroundColor Red; return }
