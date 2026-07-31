@@ -1049,13 +1049,14 @@ $btnSpeakers      = New-ActionButton "Test Speakers"
 $btnCamera        = New-ActionButton "Test Camera"
 $btnKeyboard      = New-ActionButton "Test Keyboard"
 $btnDisplay       = New-ActionButton "Test Display"
+$btnOled          = New-ActionButton "OLED Check"
 $btnUpdateDrivers = New-ActionButton "Update Drivers"
 $btnCheckUpdates  = New-ActionButton "Check for Updates"
 $btnClose         = New-ActionButton "Close"
 
 $buttons.Controls.AddRange(@(
     $btnRefresh, $btnBattery,
-    $btnSpeakers, $btnCamera, $btnKeyboard, $btnDisplay,
+    $btnSpeakers, $btnCamera, $btnKeyboard, $btnDisplay, $btnOled,
     $btnUpdateDrivers, $btnCheckUpdates,
     $btnClose
 ))
@@ -1415,6 +1416,79 @@ $btnDisplay.Add_Click({
         $statusLabel.Text = "Display tester failed to launch."
     }
 })
+
+# -- OLED check ----------------------------------------------------------------
+# Windows doesn't expose panel technology, so this is a visual test: a full-
+# screen pattern cycle. On a pure-black frame an OLED panel is truly dark (pixels
+# off, no glow); an LCD's backlight glows — obvious in a dim room or at the edges.
+# White/RGB frames also cover brightness uniformity and dead pixels.
+function Show-OledTest {
+    $HINT = "OLED check   -   click / Space = next pattern   -   H = hide text   -   Esc = close"
+    $f = New-Object System.Windows.Forms.Form
+    $f.FormBorderStyle = 'None'
+    $f.WindowState     = 'Maximized'
+    $f.TopMost         = $true
+    $f.KeyPreview      = $true
+    $f.Cursor          = [System.Windows.Forms.Cursors]::Hand
+    $f.BackColor       = [System.Drawing.Color]::Black
+
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Name      = 'hint'
+    $lbl.Dock      = 'Top'
+    $lbl.Height    = 66
+    $lbl.TextAlign = 'MiddleCenter'
+    $lbl.Font      = New-Object System.Drawing.Font('Segoe UI', 12)
+    $lbl.ForeColor = [System.Drawing.Color]::Silver
+    $lbl.BackColor = [System.Drawing.Color]::FromArgb(24, 24, 24)
+    $f.Controls.Add($lbl)
+
+    $f.Tag = @{
+        idx      = 0
+        hint     = $HINT
+        patterns = @(
+            @{ N = 'Pure black  -  OLED shows NO glow (pixels off); an LCD backlight glows. Best judged in a dim room / at the edges.'; C = [System.Drawing.Color]::FromArgb(0, 0, 0) }
+            @{ N = 'Near-black  -  stays crisp black on OLED, looks washed-out grey on a glowing LCD.'; C = [System.Drawing.Color]::FromArgb(10, 10, 10) }
+            @{ N = 'White  -  brightness + backlight uniformity.'; C = [System.Drawing.Color]::White }
+            @{ N = 'Red  -  subpixel / dead-pixel check.'; C = [System.Drawing.Color]::Red }
+            @{ N = 'Green'; C = [System.Drawing.Color]::Lime }
+            @{ N = 'Blue';  C = [System.Drawing.Color]::Blue }
+        )
+    }
+    $lbl.Text = "$HINT`r`n$($f.Tag.patterns[0].N)"
+
+    $f.Add_Click({
+        param($s, $e)
+        $t = $s.Tag
+        $t.idx = ($t.idx + 1) % $t.patterns.Count
+        $p = $t.patterns[$t.idx]
+        $s.BackColor = $p.C
+        $h = $s.Controls['hint']
+        if ($h) { $h.Text = "$($t.hint)`r`n$($p.N)" }
+    })
+    $f.Add_KeyDown({
+        param($s, $e)
+        if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { $s.Close(); return }
+        if ($e.KeyCode -eq [System.Windows.Forms.Keys]::H) {
+            $h = $s.Controls['hint']; if ($h) { $h.Visible = -not $h.Visible }; return
+        }
+        if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Space -or
+            $e.KeyCode -eq [System.Windows.Forms.Keys]::Right -or
+            $e.KeyCode -eq [System.Windows.Forms.Keys]::Return) {
+            $t = $s.Tag
+            $t.idx = ($t.idx + 1) % $t.patterns.Count
+            $p = $t.patterns[$t.idx]
+            $s.BackColor = $p.C
+            $h = $s.Controls['hint']
+            if ($h) { $h.Text = "$($t.hint)`r`n$($p.N)" }
+        }
+    })
+
+    [void]$f.ShowDialog($form)
+    $f.Dispose()
+    $statusLabel.Text = 'OLED check closed.'
+}
+$btnOled.Add_Click({ Show-OledTest })
+
 # -- Update Drivers ------------------------------------------------------------
 $btnUpdateDrivers.Add_Click({
     $hasModule = Get-Module -Name PSWindowsUpdate -ListAvailable -ErrorAction SilentlyContinue
